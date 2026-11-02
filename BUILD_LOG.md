@@ -1,0 +1,196 @@
+# Menu Page Product: Build Log
+
+## Run: Mon Nov 2, 2026 (local scaffold, first build)
+
+Scope honoured: LOCAL ONLY. Nothing pushed to GitHub, nothing deployed to Vercel, nobody contacted, no Neon, Paystack or Cloudinary accounts created. Env files hold placeholders only.
+
+## What was built
+
+### menu-template/ (Next.js 15 App Router, Tailwind 4, TypeScript, React 19, GSAP dep present, qrcode)
+
+- `restaurant.config.ts`: typed config per homework Section 2a (identity, domain, contacts, hours, skin tokens with anchor, spine and named direction, signature dish, FIRST BITE poster and duration, Cloudinary names, billing mode and plan code, editor owner email, registry state, currency, timezone). Demo instance is fictional: Ember Palm Kitchen, Lagos. No real prospect name, photo or data anywhere.
+- `design.md`: Gate 1 brief for the demo skin. Reference anchor (Dishoom pacing plus Noma restraint), named extreme direction CINEMATIC EMBER EDITORIAL, one-sentence spine, palette hexes (bg #171009, surface #241811, ink #F6EBDD, accent #E3A90A, accent2 #C1441F), type pairing (Playfair Display plus Source Sans 3, Space Mono for prices). Clearly labelled as a fictional demo instance, not a client build.
+- `lib/types.ts`: full typed data model, deliberately not Category-Item-Price. Venue, Menu (many per venue, Schedule with days plus time windows including overnight, precedence, taxIncluded, free-text price note), Section (nestable via parentId and childSectionIds, note field), Item (reusable across menus via section item lists, basePrice nullable plus priceType fixed, market, per_person, per_weight, free, none; todaysMarketPrice for market items; dietaryTags separate from allergenContains; badges; serves; isHot flag for THE STEAM; optional wine fields producer, vintage, appellation, glass, carafe, bottle prices), Variant (priced), ModifierGroup plus ModifierOption (min, max, required; option priceByVariant map so topping price depends on chosen pizza size), Bundle/SetMenu (slots with chooseCount and per-choice supplements), Special (scheduled price-rule overlay referencing items and sections; rule types percent_off, amount_off, fixed_special_price, buy_x_get_y, bundle_price; never an edited item copy), Availability/86 (separate from Item.active; entity level item, variant, modifier_option; auto-return presets end_of_service, tomorrow, indefinite, custom).
+- `lib/data/seed.ts`: fictional demo data proving the hard cases in one restaurant. (1) Swallow and Soup item: swallow variants (pounded yam, eba, amala) times required soup group (egusi, efo riro, ogbono, okro) times required protein group (assorted meat included, goat, fish, stockfish paid) plus a paid extras group (extra meat per piece, extra fish per piece, extra ponmo). (2) Ember Pizza: small, medium, large variants with topping modifier options whose priceByVariant differs per size (extra cheese 800, 1200, 1600) plus a crust group. (3) Happy Hour special overlay: 25 percent off the Drinks section, Mon to Fri 16:00 to 19:00, plus a fixed-price lunch jollof special, both as overlays on live items. (4) One 86 item: Grilled Whole Tilapia, soldOut true, autoReturn tomorrow, also demonstrates market price with todaysMarketPrice. (5) Second scheduled menu: Lunch (Mon to Fri 11:00 to 16:00, precedence 10) versus Dinner (daily 16:00 to 23:00, precedence 20), plus a Late Night menu with an overnight window (22:00 to 02:00) to prove cross-midnight schedules. Also a Family Ember Platter bundle with two choose-2 slots and a tilapia supplement, and a house red with full wine fields. All photos are hotlinked Unsplash URLs. No binary files.
+- `lib/data/index.ts`: data layer interface (getMenuDocument, saveMenuDocument, getRegistryState) with a local seed implementation that needs no database, and a Neon stub class that throws a clear message until configured. Swap is via MENU_DATA_SOURCE env.
+- `lib/engine/skin.ts`: skin resolver turning palette and type tokens into CSS variables. `lib/format.ts`: currency-aware price display (NGN round thousands, market, per person, per weight handling). `lib/specials.ts`: schedule evaluation with overnight support, active menu resolution by precedence, special lookup and special price maths, sold-out lookup.
+- Guest view at `/`: registry paused or churned state renders the holding page. Otherwise THE FIRST BITE placeholder player (poster-first single photo, 4 second settle, See the menu skip button from the first second, reduced-motion fallback text, honest comment in code that no fake frame sequence is claimed), then THE FLIP flip book (one dish per page, full bleed photo, Previous and Next dish page turns with a page-curl style transform, category jump chips, page counter) with a fast list view toggle. THE STEAM ambient layer on hot-flagged dishes, THE 86 state (grayscale photo plus Sold out chip in both views), THE GOLD LEAF gloss sweep plus struck-through price on active specials, THE REVEAL detail content (variants, modifier groups with variant-dependent prices spelled out, wine prices, serves, allergens) on each flip page. Active menu, specials and prices resolve from the schedule at render time.
+- Editor at `/admin`: stub magic-link sign-in screen, clearly labelled demo mode with no real email sending. Item list with price edit, photo URL field, 86 toggle with auto-return choice (end of service, tomorrow, until switched back, custom), special badges shown from the overlay data, Cloudinary usage meter placeholder (percentage bar at 34 percent in demo, warning copy and accent change at 80 percent), and a print-ready QR download for the configured domain (PNG via the qrcode library plus SVG download). Tiny editor only: no ordering, no payments UI, no dashboard. Demo edits live in browser state; the write path is stubbed at `/api/menu` (GET and PUT against the data layer).
+- `app/api/menu/route.ts`: menu read and write route against the data layer.
+- `schema.sql`: Neon tables restaurants (state enum prospect, awaiting_payment, building, live, grace, paused, lifetime, churned; billing_mode enum; Paystack codes; grace_until; audit fields), menus (menu jsonb, version, updated_by), payment_events (append-only). Slug primary keys carry a kebab-case check constraint (3 to 63 chars).
+- `scripts/new-client.ts`: dry-run safe stub. Takes slug plus intake JSON, validates the slug, prints the registry-row SQL for restaurants and menus, and previews the generated config. Only writes a restaurant.config.ts into a target folder when both write and target flags are passed. Dry run verified with a test intake (see below).
+
+### menu-billing/ (Next.js stub, central webhook switchboard)
+
+- `app/api/webhooks/paystack/route.ts`: POST handler that reads the raw body first, verifies the Paystack x-paystack-signature as HMAC-SHA512 with timing-safe comparison, returns 401 on a bad signature and 500 when PAYSTACK_SECRET_KEY is not configured, then parses and dispatches. Env placeholders only.
+- `lib/event-map.ts`: event-to-state mapping exactly per homework Section 3.3. charge.success sets live for monthly and lifetime for one-time. invoice.payment_failed sets grace with grace_until plus 7 days and the menu stays live (no pause). subscription.disable sets paused only when Evans has ordered a manual pause or grace has already ended; inside grace it defers. subscription.create stores subscription, customer and email token codes without flipping state. invoice.create logs as early warning. invoice.update logs for reconciliation. subscription.not_renew logs and keeps the instance live until the paid period ends. subscription.expiring_cards is notify-only. Every event is appended first.
+- `lib/registry.ts`: append-only payment_events write interface plus restaurant row read and upsert interface, with an in-memory local implementation and a marked Neon TODO. No database is required to test the mapping locally.
+- `app/api/health/route.ts`: health route returning ok, service name and time. `.env.example` holds placeholders only.
+
+## Verification
+
+- menu-template: `npm install` succeeded (82 packages). `npm run build` first failed on one type error (saveMenuDocument argument count between the interface and the local class). Fixed in `lib/data/index.ts`. Rebuild passed clean: routes `/` (108 kB first load), `/admin` (115 kB), `/api/menu`, all compiled and type-checked with Next.js 15.5.28.
+- menu-billing: `npm install` succeeded and `npm run build` passed clean: `/`, `/api/health`, `/api/webhooks/paystack`.
+- new-client dry run: ran with a throwaway test intake. Printed dry-run mode, both registry INSERT statements, and a config preview. Wrote nothing.
+- Em dash check: grepped all template and billing source, styles and docs for the em dash character. Zero matches.
+- Not verified yet (needs a running browser or real services): guest view on a phone viewport, THE FLIP frame rate, editor QR scan test on paper, webhook end-to-end against Paystack test mode, Neon queries. These are listed under what remains, not claimed as done.
+
+## Gate 3 audit (Nov 2, 2026, main agent, after the scaffold landed)
+
+- Rebuilt after fixing one real dead photo: the Extra Swallow item pointed at an Unsplash URL that returns 404. Replaced with a verified 200 URL and rebuilt clean; the running local server now serves the fixed seed.
+- All 11 seed photo URLs checked individually with curl: every one returns 200.
+- Overflow check (Playwright, JS-measured): mobile 375 scrollWidth 375, desktop 1440 scrollWidth 1440. No horizontal overflow on guest or admin.
+- Sandbox limitation, stated plainly: this VM's headless Chromium cannot open external image hosts (the egress proxy refuses its CONNECT tunnels, net::ERR_TUNNEL_CONNECTION_FAILED), so local screenshots show the flip stage without its photo even though the same URL returns 200 over curl. A live-browser check was also requested. Evans's phone check remains the true visual verdict, as with every build.
+- Top AI tells in the demo skin, named before Evans sees it: (1) the display face is Playfair Display, a safe editorial default, chosen for the demo only and first in line to change per client; (2) with the photo absent the flip stage reads as a large empty dark panel, the layout leans entirely on the photo landing; (3) category chips wrap to three rows on a 375 phone, tidy but long; (4) the gold accent plus dark brown palette sits close to the Claro brand palette, a demo skin should not borrow the house colours by default.
+
+## What remains
+
+1. Neon: create the project, run schema.sql, implement the Neon data layer in menu-template and the Neon registry store in menu-billing behind the existing interfaces.
+2. Paystack test mode: create the NGN and USD plans and one-time pages, send test events (including a failed charge) through the webhook, and prove live to grace to paused plus the one-time lifetime flip.
+3. FIRST BITE real frames: the player currently shows one honest poster. The per-client 50-frame sequence and economy cut plug into framesBaseUrl when a real pilot is built.
+4. Editor production wiring: real magic-link email to the owner domain address, writes through /api/menu to Neon, signed Cloudinary upload widget and a live usage meter reading from the Cloudinary API with upload blocking at the cap, staff 86 permission split from price permission.
+5. Editor depth from the taxonomy report (Tier 0): reorder and duplicate, draft versus published with guest preview as of a chosen day and time, per-restaurant-type presets (Buka, Shawarma, Cafe and others), variant and modifier editing screens. The data model already carries all of it; the screens do not yet.
+6. Guest polish before any pilot: swipe gestures on THE FLIP (buttons work now), GSAP page-curl frame sequence, low-data economy photos, and Evans visual review of the demo skin on his phone. Nothing is pushed or deployed until he says so.
+7. Open product decisions still with Evans (from the homework, unchanged): Canada charging currency on Paystack (USD plan versus NGN equivalent) and the exact holding page wording for paused menus. The domain lapse question is already settled: no fallback subdomain, the page stays down until the client renews.
+
+## V2 Skin Rebuild: MIDNIGHT GRILL POSTER (Mon Nov 2, 2026)
+
+Evans rejected the v1 skin outright (Playfair on dark brown, Claro gold, empty dark photo stage, wrapping chips, text-wall admin). Business logic untouched: data model, editor functions, billing, seed content and schedules are exactly as v1. This run was appearance only. Local only, nothing pushed or deployed.
+
+### What changed
+
+- Art direction locked and written into design.md Gate 1: MIDNIGHT GRILL POSTER. Anchors: Dishoom poster-led world building, Pizzeria Beddia process photography, Awwwards monumental condensed type. Spine: "Fire, smoke and ink: every dish is a poster from one charcoal night."
+- Palette replaced: bg #0D0A07, surface #171008, ink #F7EFE3, ONE flame accent #FF5C1F (price, action, active), gold #E3A90A spent only on specials. No Claro colours, no navy, no gradients on text.
+- Type replaced via next/font/google: Anton (monumental caps, 22px wordmark to clamp 21vw on the poster), Cormorant Garamond italic (dish descriptions, poetry), Manrope (body and UI), Space Mono (prices, labels, buttons).
+- Photos are now local: all 11 seed photos plus the poster downloaded with curl into menu-template/public/demo at w=1080 q=70 and verified as real JPEGs (88KB to 467KB each). seed.ts and restaurant.config.ts point at /demo/... paths. design.md records why: demo photos are local so the skin can be judged anywhere; production per-client images live on the client's Cloudinary.
+- THE FIRST BITE is now a film poster: signature photo full viewport with a slow settle, bottom-third scrim only, name stacked in Anton caps devouring the lower page, one Cormorant italic line about the charcoal chicken, mono contact line, flame See the menu pill, thin flame progress bar filling over the hold. Skip and reduced motion behave as before.
+- Menu header compact on one line (Anton wordmark left, Flip/List toggle right), mono menu line under it. When a special is live, a full-width gold strip in mono caps (verified live at a 17:30 clock: "HAPPY HOUR · 25% OFF DRINKS · TILL 7PM").
+- Category rail is one horizontally scrollable row, never wraps. Mono caps chips, active chip filled flame.
+- THE FLIP is a poster card: story progress segments across the photo top, photo full-bleed, flame price pill overlapping the photo edge (gold pill plus struck base price on specials), dish name in Anton at 40px and up, Cormorant italic description, variants and modifier groups as hairline poster rows with mono prices (variant-priced toppings spelled out per size), serves, badges and allergens as small mono labels. Chunky Previous and Next buttons with a mono counter.
+- THE 86: photo grayscale, rotated outline SOLD OUT stamp in Anton across the photo, text content dimmed, price pill stays full flame.
+- List view: editorial rows, 92px square photo, Anton name, one Cormorant line, mono price right, gold special prices with struck base, hairline under each row.
+- Admin sign-in: poster photo strip with the Anton wordmark on mobile, 60/40 split on desktop, one short magic link line, demo label small in mono. Editor: hairline rows with 56px thumbnails, mono price, a real styled toggle switch for the 86 with its auto-return select beside it, slim Cloudinary meter with mono percentage, QR downloads as flame and outline buttons.
+- Grain overlay (CSS noise) on dark panels, hairlines in cream at 14 percent instead of card walls.
+
+### Fix rounds during the audit
+
+- Round 1: variant group label read "Choose your size" over pounded yam, eba and amala. Label now derives from the data (priced variants say "Choose your size", included variants say "Choose yours"). Flip photos got a light grade (saturate, contrast, bottom scrim) so daylight stock sits inside the midnight palette.
+- Round 2: on the sold-out tilapia page the price pill collided with the dish name and was dimmed by the 86 wrapper. Content now has clear space under the pill and the dimming wraps only the text, never the pill. Recaptured and verified clean.
+
+### Verification (this run, in order)
+
+- npm run build: clean, no type or lint errors.
+- Local server restarted on port 3107 and serving the new build (guest 200, admin 200, poster 200).
+- Playwright audit (verification/audit.mjs, local photos so nothing depends on external hosts): every capture measured scrollWidth equal to innerWidth, zero horizontal overflow: firstbite-mobile 375/375, flip-mobile 375/375, flip-86-mobile 375/375, list-mobile 375/375, flip-desktop 1440/1440, flip-happyhour-mobile 375/375, admin-signin-mobile 375/375, admin-editor-mobile 375/375.
+- Every dish photo in every capture reports naturalWidth 1080 (loaded), QR image 1024. The v1 empty-stage failure cannot recur in screenshots.
+- Screenshots (in ~/workspace/menu-page-product/verification): v2-firstbite-mobile.png, v2-flip-mobile.png, v2-flip-full-mobile.png (whole poster card), v2-flip-86-mobile.png, v2-flip-desktop.png, v2-flip-happyhour-mobile.png, v2-list-mobile.png, v2-admin-signin-mobile.png, v2-admin-editor-mobile.png. All nine were looked at by eye, not just measured.
+- Em dash grep across app, components, config and design.md: zero matches.
+
+### Remaining tells, stated honestly
+
+1. The demo food photos are still Western stock (a tomato soup with flowers and almonds stands in for egusi). The skin system is what is on trial here; a real client build leads with the client's own photos, per the standing rule. One bright daylight soup photo still fights the midnight palette hardest.
+2. THE FLIP has no swipe gesture yet, buttons only, and the page turn is a 500ms rotate fade, not the shared 16-frame page-curl from the homework spec. The poster card carries the page for now; the curl is still template work owed.
+3. THE STEAM reads as a soft blur blob at screenshot moments rather than moving steam, and the grain overlay is subtle to the point of invisibility on the darkest panels. Both are motion-era judgements Evans can only make on a live screen.
+
+## Photo fix round 3 (Nov 2, 2026, main agent audit)
+- Swallow and Soup photo swapped twice: first swap landed on a bright rice bowl (wrong ID memory), corrected after viewing a contact sheet to photo-1548943487 (dark, rich stew bowl, on-palette). Extra Swallow now uses photo-1512058564366.
+- The 86 item photo (shrimp gumbo bowl) replaced with photo-1519708227418 (grilled fish on black plate, dark) and the item renamed Charcoal Grilled Fish with matching description.
+- Rebuilt clean, server restarted, recaptured: flip, 86 and list all 375/375 overflow, every photo loaded at naturalWidth 1080.
+
+## FLIP upgrade: GSAP page fold + readability pass (Nov 2, 2026, Evans's checklist)
+
+Evans approved the v2 face ("doesn't look bad") and set the checklist: a nice flip book animation that feels fluid and premium, and fonts like premium physical menu companies (premium look plus ease of reading). This round is motion craft and type tuning only; business logic and the MIDNIGHT GRILL POSTER skin are untouched.
+
+### What the turn does now, frame by frame
+
+- THE FLIP is a real GSAP fold, replacing the 500ms CSS rotate fade. The poster card was extracted into a FlipCard component so two pages can exist at once.
+- On a turn, the incoming page renders immediately as the base layer and settles from scale 0.985 to 1 over the turn. The outgoing page sits on top as an overlay and folds away around its spine edge: forward turns fold from the left spine (rotateY 0 to -104 degrees on a stage with 1400px perspective), reverse turns mirror it (right spine, 0 to +104). A soft shadow gradient rides inside the folding sheet, swelling to 0.85 opacity in the first 240ms then easing back, so the sheet darkens toward its free edge as it lifts. Past 90 degrees the sheet goes edge-on and disappears, like paper passing vertical.
+- One turn is 580ms on a custom GSAP ease built in the power3.out family (fast lift, soft land, no bounce, no elastic), tempered so the fold is genuinely mid-flight at the halfway mark: measured at 260ms the sheet sits at rotateY about -57 degrees.
+- Input locks during a turn and queues nothing: buttons disable, swipes and keys are ignored, a double tap can never stack turns.
+- Category jumps riffle: the outgoing sheet flutters through two quick partial folds (to about -34, back to -13, out to -40, roughly 250ms of flutter), then the full fold lands on the chapter's first dish. Verified live: the Drinks jump lands on Fresh Palm Wine.
+- Guests can also turn by touch swipe on the card (50px threshold, horizontal intent must beat vertical by 1.3x so page scrolling never triggers it) and by left and right arrow keys.
+- Dish photos two pages either side of the current one preload via Image() objects, so a turn never waits on the network.
+- Reduced motion keeps the promise: the fold and the settle are replaced by a plain 200ms crossfade.
+- Only transforms and opacity animate, so the fold holds frame rate on a mid-range Android.
+
+### Readability tuning (fonts like a premium printed menu)
+
+Font families unchanged (Anton, Cormorant Garamond italic, Manrope, Space Mono, the print menu stack). Sizes tuned for reading: dish description is Cormorant italic 19px at line-height 1.5 (was leading-snug), variant and modifier rows sit at 15px with 1.5 line-height, per-size price lines are 13px, list descriptions and notes are at 1.5 line-height, and no reading text on the guest view sits under 13px. Anton dish names get letter-spacing opened to 0.025em so the big caps breathe instead of crowding.
+
+### Honest scope note (page-curl asset)
+
+The homework spec describes a shared 16-frame photoreal page-curl sequence composited over the client's own dish photos. That photographed engine asset does not exist yet. This GSAP fold is the engine until the curl asset is shot or generated. Nothing in this round claims the frame sequence exists.
+
+### Verification (this run, in order)
+
+- npm run build: clean. Server restarted on port 3107, guest returns 200.
+- Mid-turn capture (verification/flip-capture.mjs): stage scrolled to the top, Next dish fired by JS click so the frame does not move, screenshot at 260ms caught the fold mid-flight. The overlay's computed transform read rotateY about -57 degrees, and the shot shows it by eye: the Swallow and Soup sheet folded around its left spine, narrowing in perspective, shadowed toward the free edge, with the Extra Swallow page already revealed beneath it. Saved as v2-flip-midturn-mobile.png. The settled next page is v2-flip-page2-mobile.png.
+- Two capture lessons worth keeping: a plain Playwright click scrolls the button into view and the fold gets filmed at the card's tail; and the audit's page-step waits had to rise to 800ms because the input lock (correctly) eats clicks fired mid-turn.
+- Full audit re-run after the change: overflow JS-measured equal everywhere (firstbite 375/375, flip 375/375, flip-86 375/375, list 375/375, happy hour 375/375, admin sign-in 375/375, admin editor 375/375, desktop 1440/1440), every dish photo naturalWidth 1080, QR 1024. The 86 run lands on Charcoal Grilled Fish and the riffle jump lands on Fresh Palm Wine.
+- Em dash grep across the touched files: zero matches in copy (dashes in code are numeric negatives for rotateY, not punctuation).
+
+### Remaining tells, stated honestly
+
+1. The fold is one rigid sheet: it reads as a book page turning, but it does not bend like paper mid-turn. Only the photographed 16-frame curl (or a segmented mesh) bends, and that asset is still owed.
+2. The riffle flutters the outgoing sheet only. A real riffle fans several pages; here the chapter page lands after one sheet's flutter, which reads as a fast skip rather than pages riffling past.
+3. The turn treats the whole poster card, detail rows included, as the page. On a long card the fold swings a tall sheet; on a phone the guest mostly watches the photo and the top of the card fold, which is where the capture was framed.
+
+## V3: 5-star physical-menu research applied (Nov 2, 2026, evening)
+
+Research rules applied (verified the same evening): The French Laundry's printed card carries zero photos, a Garamond-style serif, dish name plus a poetic ingredient line, generous empty space and one calm per-person price; Hilton's printed-menu standard sets section headings in tracked uppercase, dish titles in title case, and descriptions and prices in a mono face (our tracked mono caps and Space Mono prices already match a real 5-star standard); menu-reading research says guests read a menu like a book and the two-page spread is the most manageable format. The synthesis: steal print's restraint of layout (one dish, space, hierarchy, quiet prices) and make the single photo bigger, never more photos per page, because on a phone the photo is the plating moment.
+
+What changed, by breakpoint:
+
+- Phone (under 640px): the flip photo grew from a 320px band to 86dvh (max 740px). The dish name and subtitle moved up onto the photo's bottom edge over a dark gradient scrim, poster style; the price pill still straddles the photo's bottom edge. The panel below tightened: variants and modifier groups are now set the print way (tracked flame label, then the options on flowing lines with mono prices inline) instead of one row per option, which bought back the height the photo took.
+- Fold unfolded, tablet and desktop (640px and up): the flip card is now an open book spread inside a 1120px stage. Left page: the dish photo full bleed with the section label, progress segments and the price pill inside its bottom corner. Right page: name, subtitle, description, choices and tags on the surface panel, vertically centred. A centre spine (vertical gradient shadow where the pages meet) plus a soft outer shadow under the card makes it sit like an object. Header, happy hour strip and category rail are constrained to the same 1120px.
+- THE FLIP at spread widths folds around the centre spine: the turning sheet is the outgoing right page (or the left photo page in reverse), anchored on its spine edge with the same GSAP fold, shadow sweep and 580ms settle. Verified mid-turn at 768px: the right page is caught folding over the incoming spread. The phone fold is unchanged. Reduced motion still crossfades the whole card.
+- List view: at 640px and up the rows run in two columns inside the same max width, and list prices are now quiet print style: plain Space Mono in cream, no bold, no flame, no pill (special prices included; the gold badge text still marks the special). Bundle prices went quiet the same way. The flip card keeps its flame price pill as the poster accent.
+- THE FIRST BITE: unchanged, full screen at every size.
+- One fix found while verifying: the 86 desaturation rule was being overridden by the photo's inline grade, so sold-out photos were never actually grey. The rule now wins, in both layouts: grey photo page, SOLD OUT stamp on the photo, text page dimmed.
+
+Measurements (Playwright, JS-measured):
+- Photo share of the flip card at 375px: photo 688px of a 1178px card = 58.4 percent (was 54.9 in round 1 of this pass, about 40 percent in v2). On choice-light pages the share runs higher.
+- Overflow: 375/375, 768/768, 1440/1440 on flip, list and the 86 spread. Every dish photo loaded at naturalWidth 1080.
+- Captures: verification/v3-flip-mobile.png, v3-flip-fold.png (768 spread), v3-flip-midturn-fold.png (768 mid-turn around the spine), v3-flip-desktop.png, v3-list-tablet.png, v3-flip-86-fold.png. Fix rounds: 2 (photo height 78 to 86dvh with panel tightening to land the share in the 58 to 62 band; the 86 grayscale fix). Scripts: verification/audit3.mjs and audit3b.mjs.
+
+Honest remaining tells:
+1. Mid-turn, the folding sheet leans toward the viewer under the stage perspective and its top briefly projects past the card's top edge, over the rail. It reads as the page lifting off the book, but it is a perspective artefact, and only the photographed page-curl asset from the homework spec would bend the sheet like real paper instead.
+2. The spine shadow is subtle on dark photos; on a bright photo page the book gutter nearly disappears.
+3. At exactly 640 to 720px wide the spread pages are narrow, and long modifier lines wrap to three or four lines on the right page. Readable, but the least elegant width in the set.
+4. Demo photos are still Western stock standing in for client food, unchanged from v2. A client build leads with the client's own photos.
+
+## Integration wiring prep (Mon Nov 2, 2026, evening)
+
+Evans's call: he does not want to judge the demo until Paystack, Cloudinary and Neon actually work. He already has Paystack and Cloudinary accounts and will create Neon; keys move through the Secure Vault, never chat. This run prepared the code so the wiring session only plugs in env values and runs the test sequence. LOCAL ONLY: nothing pushed, nothing deployed, no real keys used or invented.
+
+### What was implemented
+
+- **menu-billing Neon registry (slice 1).** `@neondatabase/serverless` 1.2.0 added. `lib/registry.ts` now has a Neon-backed `RegistryStore` beside the in-memory one: `getRegistry()` returns the Neon store when `DATABASE_URL` is set, in-memory otherwise. `appendPaymentEvent` inserts into `payment_events` (payload as jsonb), first ensuring the restaurant row exists so the append-only log can never fail on the slug foreign key. `getRestaurant` maps the snake_case row back to the typed `RestaurantRow`. `upsertRestaurant` is a true partial upsert (only fields present in the patch are written, via a column map and `ON CONFLICT (slug) DO UPDATE`), so it never clobbers columns the event map did not touch. `.env.example` rewritten with `PAYSTACK_SECRET_KEY` and `DATABASE_URL` plus where each value comes from.
+- **Schema addition.** `restaurants.manual_pause_ordered boolean NOT NULL DEFAULT false` added to `menu-template/schema.sql` (the event map already carried the field in memory; the column was missing) plus an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` so databases created from the earlier schema catch up.
+- **menu-template billing state from Neon (slice 2).** New `lib/db/registry-status.ts`: server-side read of `state` and `grace_until` from the restaurants table for the instance slug. Returns null when `DATABASE_URL` is unset, the row is missing, or the read fails (error logged), so callers fall back cleanly. One product rule lives here: a `grace` row whose `grace_until` has passed reads as `paused`, because menu-billing defers the pause write while grace runs. The Neon data layer in `lib/data/index.ts` is implemented now: `getRegistryState` uses the registry read with `restaurant.config.ts` as fallback; `getMenuDocument` reads the `menus` jsonb row when one exists and falls back to the seed document; `saveMenuDocument` upserts into `menus` (ensuring the restaurant row first). Layer selection: Neon when `DATABASE_URL` is set or `MENU_DATA_SOURCE=neon`, seed otherwise. `app/page.tsx` now takes its state from the data layer instead of the static config and is `force-dynamic`, so a webhook landing changes the guest page on the next request. `.env.example` added for menu-template.
+- **Cloudinary unsigned upload (slice 3).** New `lib/upload/cloudinary.ts`: `cloudinaryUploadConfigured()` plus `uploadPhotoToCloudinary(file, folder?)`, which posts FormData to the Cloudinary upload endpoint with the unsigned preset from `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET` and cloud name from `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME`, then passes the returned `secure_url` through the existing `gradedPhotoUrl` helper before handing it back. Wired into `AdminEditor.tsx` as an Upload photo button beside each item's Photo URL field: disabled with an explanatory note when the env vars are absent, per-item uploading state, per-item error line, and on success the graded Cloudinary URL lands in the photo field. No API key or secret is used anywhere. The storage meter stays a placeholder on purpose: a live reading needs the Cloudinary Admin API (key + secret, server-side) and is a later wiring step.
+- **INTEGRATION.md (slice 4).** New file at the product root: env table per project with the exact origin of every value (Paystack test secret from Evans's dashboard, Neon pooled connection string, Cloudinary cloud name and unsigned preset), the one-time setup (run schema.sql, seed the demo registry row, create the NGN plan and subscription page with slug and billing_mode metadata, set the webhook URL, tunnel note for local runs), and a seven-step end-to-end test sequence: subscribe success to live, failed charge to grace with the menu still live, disable inside grace deferred then pause after grace expiry, manual pause path, one-time payment to lifetime, Cloudinary upload, and the no-credentials fallback check.
+
+### Verification
+
+- menu-billing `npm run build`: clean. menu-template `npm run build`: clean (home route now ƒ dynamic, as intended).
+- Runtime smoke test with NO env values set (the current state): template home 200, template admin 200, menu-billing health returns ok, webhook POST returns 500 (secret key not configured), exactly the designed pre-credential behaviour.
+- Em dash grep across all new and changed files: zero matches.
+- NOT verified, by design: any query against a real Neon database, any Paystack event, any Cloudinary upload. No credentials exist in this environment yet; those proofs are the wiring session's job, following INTEGRATION.md.
+
+### What remains stubbed (unchanged, stated plainly)
+
+1. Editor sign-in is still demo mode; no magic-link email.
+2. The editor UI still holds edits in browser state; it does not yet call `/api/menu` PUT, so screen edits do not persist to Neon (the API and data layer writes are ready).
+3. Cloudinary meter is a placeholder; live usage needs the Admin API with key + secret on the server.
+4. No background sweep flips grace to paused in the database; the write happens on `subscription.disable` after grace or on manual order, and the template read covers the gap meanwhile.
+5. Evans's inputs still owed for the wiring session: Paystack TEST secret key via the vault, Neon account and project (connection string), Cloudinary unsigned preset created in his account, and a public webhook address for menu-billing (tunnel or preview deploy, his call at push time).
+
+## 2026-11-02 evening: live integration wiring session (test mode)
+
+Evans supplied his Paystack test keys and Neon connection strings directly in chat (after the vault route for Paystack was already connected). Values live ONLY in the two projects' .env.local files (gitignored, never pushed). Nothing secret is recorded here.
+
+- Neon: pooled connection verified from the template (@neondatabase/serverless, channel_binding param tolerated). schema.sql applied (8 statements): restaurants, menus, payment_events all exist. Demo row seeded for ember-palm-kitchen.
+- Webhook proof run against the LOCAL menu-billing with payloads signed using Evans's real test secret (transport simulated, cryptography and database real): bad signature 401; subscription.create stored without state flip; charge.success (monthly) to live; invoice.payment_failed to grace with grace_until +7 days and the menu still serving; subscription.disable inside grace deferred; grace expired in DB and the template guest page switched to the holding page from the registry read; grace restored and the menu returned; manual_pause_ordered plus subscription.disable to paused immediately with holding page; one-time charge.success to lifetime with dates cleared and the menu serving. payment_events logged all 6 events in order. Row reset to awaiting_payment/monthly afterwards for the genuine checkout test.
+- Caught during the run: an old template server from the afternoon audit still held port 3107, which invalidated the first template check; killed and re-verified against the correct server.
+- Still unproven: a genuine Paystack hosted checkout producing a webhook over the public internet (needs menu-billing deployed at a public URL and the webhook URL set in Evans's Paystack test settings); Cloudinary upload (needs Evans's cloud name and the unsigned preset name); editor save-to-Neon button wiring.
