@@ -3,5 +3,6 @@ import { restaurantConfig } from "../../restaurant.config";
 import AdminEditor from "../../components/AdminEditor";
 export default async function AdminPage() {
   const doc = await dataLayer.getMenuDocument(restaurantConfig.slug);
-  return <AdminEditor initialDoc={doc} />;
+  const billingState = await dataLayer.getRegistryState(restaurantConfig.slug).catch(() => "unknown");
+  return <AdminEditor initialDoc={doc} billingState={billingState} />;
 }

@@ -23,6 +23,10 @@ export interface Venue {
   currency: string;
   timezone: string;
   defaultLocale: string;
+  // Owner-editable copy for the holding page shown while the venue is
+  // paused. Optional: venues created before this field fall back to the
+  // holding page's built-in copy.
+  holdingMessage?: string;
 }
 
 export interface MenuEntity {

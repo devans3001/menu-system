@@ -1,70 +1,148 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-import QRCode from "qrcode";
-import type { MenuDocument, AutoReturnPreset } from "../lib/types";
-import { formatPrice } from "../lib/format";
-import { cloudinaryUploadConfigured, uploadPhotoToCloudinary } from "../lib/upload/cloudinary";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MenuDocument } from "../lib/types";
 import { restaurantConfig } from "../restaurant.config";
+import OverviewSection from "./admin/OverviewSection";
+import MenusSection from "./admin/MenusSection";
+import ItemsSection from "./admin/ItemsSection";
+import SpecialsSection from "./admin/SpecialsSection";
+import AvailabilitySection from "./admin/AvailabilitySection";
+import QrSection from "./admin/QrSection";
+import SettingsSection from "./admin/SettingsSection";
+import type { EditorSectionId } from "./admin/shared";
 
-// Demo mode: edits live in browser state only. In production these
-// writes go through /api/menu to the Neon menus row, no redeploy.
-// Visual system: MIDNIGHT GRILL POSTER tokens. Dark product surface,
-// flame for action, mono for numbers, hairlines instead of card walls.
-export default function AdminEditor({ initialDoc }: { initialDoc: MenuDocument }) {
-  const [doc, setDoc] = useState<MenuDocument>(structuredClone(initialDoc));
+// Owner editor shell. One document, seven rooms: Overview, Menus, Items,
+// Specials, Availability, QR and Links, Settings. The document loads from
+// /api/menu, and saves write the whole document back through /api/menu
+// PUT, which persists to the Neon menus row when DATABASE_URL is set.
+// Structural changes (new dish, 86 toggle, special, menu add) save on
+// their own; field edits collect under the Save button with an
+// unmistakable state. Sign-in stays demo mode until magic links wire.
+const SECTIONS: { id: EditorSectionId; label: string; short: string }[] = [
+  { id: "overview", label: "Overview", short: "Overview" },
+  { id: "menus", label: "Menus", short: "Menus" },
+  { id: "items", label: "Items", short: "Items" },
+  { id: "specials", label: "Specials", short: "Specials" },
+  { id: "availability", label: "Availability", short: "86 Board" },
+  { id: "qr", label: "QR and Links", short: "QR + Links" },
+  { id: "settings", label: "Settings", short: "Settings" },
+];
+
+type SaveState = "clean" | "dirty" | "saving" | "saved" | "error";
+
+// Shape guard before any save: a corrupt document must never reach the
+// database. Mirrors the promises the item and special forms already make.
+function validateDocument(doc: MenuDocument): string | null {
+  const sectionIds = new Set(doc.sections.map(s => s.id));
+  for (const m of doc.menus) {
+    if (!m.name.trim()) return "Every menu needs a name.";
+    for (const id of m.sectionIds) if (!sectionIds.has(id)) return `The ${m.name} menu points at a section that no longer exists.`;
+  }
+  for (const item of doc.items) {
+    if (!item.name.trim()) return "Every dish needs a name.";
+    if (item.basePrice !== null && !Number.isFinite(item.basePrice)) return `The price for ${item.name} is not a number.`;
+    if (item.todaysMarketPrice != null && !Number.isFinite(item.todaysMarketPrice)) return `The market price for ${item.name} is not a number.`;
+  }
+  for (const v of doc.variants) if (v.price !== null && !Number.isFinite(v.price)) return `The price for variant ${v.name} is not a number.`;
+  for (const o of doc.modifierOptions) if (!Number.isFinite(o.price) || o.price < 0) return `The price for ${o.name} must be 0 or more.`;
+  for (const sp of doc.specials) {
+    if (!sp.name.trim()) return "Every special needs a name.";
+    if (!Number.isFinite(sp.ruleValue)) return `The discount on ${sp.name} is not a number.`;
+  }
+  return null;
+}
+
+function billingChip(state: string): { text: string; live: boolean } {
+  switch (state) {
+    case "live": return { text: "Page live", live: true };
+    case "lifetime": return { text: "Page live, paid once", live: true };
+    case "grace": return { text: "Page live, payment grace", live: true };
+    case "paused": return { text: "Page paused", live: false };
+    case "churned": return { text: "Page off", live: false };
+    default: return { text: "Demo", live: true };
+  }
+}
+
+export default function AdminEditor({ initialDoc, billingState }: { initialDoc: MenuDocument; billingState?: string }) {
+  const [doc, setDoc] = useState<MenuDocument>(() => structuredClone(initialDoc));
+  const [savedJson, setSavedJson] = useState<string>(() => JSON.stringify(initialDoc));
+  const [saveState, setSaveState] = useState<SaveState>("clean");
+  const [saveMessage, setSaveMessage] = useState("");
   const [email, setEmail] = useState("");
   const [signedIn, setSignedIn] = useState(false);
-  const [cloudPct] = useState(34); // placeholder meter reading; live usage needs the Cloudinary Admin API (key + secret), wired later
-  const [uploadingId, setUploadingId] = useState<string | null>(null);
-  const [uploadError, setUploadError] = useState<{ id: string; message: string } | null>(null);
-  const uploadsConfigured = cloudinaryUploadConfigured();
-  const [qrPng, setQrPng] = useState(""); const [qrSvg, setQrSvg] = useState("");
-  const menuUrl = "https://" + restaurantConfig.domain.primary + "/";
+  const [section, setSection] = useState<EditorSectionId>("overview");
+  const [pendingNewItem, setPendingNewItem] = useState(false);
+  const docRef = useRef(doc);
+  docRef.current = doc;
+  const savingRef = useRef(false);
+
+  const dirty = useMemo(() => JSON.stringify(doc) !== savedJson, [doc, savedJson]);
+  const chip = billingChip(billingState ?? "demo");
+
+  // Freshest copy on load: the server render can lag a save made in
+  // another tab, so the editor re-reads the document from the API.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/menu")
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error("read failed"))))
+      .then((fresh: MenuDocument) => {
+        if (cancelled) return;
+        setDoc(structuredClone(fresh));
+        setSavedJson(JSON.stringify(fresh));
+        setSaveState("clean");
+      })
+      .catch(() => { /* keep the server-rendered copy */ });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
-    QRCode.toDataURL(menuUrl, { width: 1024, margin: 2 }).then(setQrPng).catch(() => {});
-    QRCode.toString(menuUrl, { type: "svg" }).then(setQrSvg).catch(() => {});
-  }, [menuUrl]);
+    if (dirty && saveState !== "saving" && saveState !== "error") setSaveState("dirty");
+    if (!dirty && saveState === "dirty") setSaveState("clean");
+  }, [dirty, saveState]);
 
-  const availability = useMemo(() => new Map(doc.availability.map(a => [a.entityId, a])), [doc]);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
 
-  function setPrice(itemId: string, value: string) {
-    const n = value === "" ? null : Number(value);
-    setDoc(d => ({ ...d, items: d.items.map(i => i.id === itemId ? { ...i, basePrice: Number.isNaN(n as number) ? i.basePrice : n } : i) }));
-  }
-  function setPhoto(itemId: string, value: string) {
-    setDoc(d => ({ ...d, items: d.items.map(i => i.id === itemId ? { ...i, photoUrl: value } : i) }));
-  }
-  // Unsigned Cloudinary upload (lib/upload/cloudinary.ts). On success the
-  // graded delivery URL lands in the photo field, exactly as a pasted
-  // Cloudinary URL would.
-  async function uploadPhoto(itemId: string, file: File | undefined) {
-    if (!file) return;
-    setUploadError(null);
-    setUploadingId(itemId);
-    try {
-      const url = await uploadPhotoToCloudinary(file, restaurantConfig.cloudinary.folder);
-      setPhoto(itemId, url);
-    } catch (e) {
-      setUploadError({ id: itemId, message: e instanceof Error ? e.message : "Upload failed. Try again." });
-    } finally {
-      setUploadingId(null);
+  const saveWith = useCallback(async (toSave: MenuDocument) => {
+    if (savingRef.current) return;
+    const problem = validateDocument(toSave);
+    if (problem) {
+      setSaveState("error");
+      setSaveMessage(problem);
+      return;
     }
-  }
-  function toggle86(itemId: string, preset: AutoReturnPreset) {
-    setDoc(d => {
-      const existing = d.availability.find(a => a.entityType === "item" && a.entityId === itemId);
-      const soldOut = existing ? !existing.soldOut : true;
-      const rest = d.availability.filter(a => !(a.entityType === "item" && a.entityId === itemId));
-      return { ...d, availability: [...rest, { entityType: "item" as const, entityId: itemId, soldOut, autoReturn: preset, updatedAt: new Date().toISOString() }] };
-    });
-  }
-  function downloadSvg() {
-    const blob = new Blob([qrSvg], { type: "image/svg+xml" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "menu-qr.svg"; a.click();
-  }
+    savingRef.current = true;
+    setSaveState("saving");
+    setSaveMessage("");
+    try {
+      const res = await fetch("/api/menu", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(toSave) });
+      if (!res.ok) throw new Error(`Save failed (HTTP ${res.status}).`);
+      const saved = (await res.json()) as MenuDocument;
+      setDoc(structuredClone(saved));
+      setSavedJson(JSON.stringify(saved));
+      const t = new Date(saved.updatedAt);
+      setSaveState("saved");
+      setSaveMessage(`Saved ${t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+    } catch (e) {
+      setSaveState("error");
+      setSaveMessage(e instanceof Error ? e.message : "Save failed. Check your connection and retry.");
+    } finally {
+      savingRef.current = false;
+    }
+  }, []);
 
-  const inputCls = "w-full border hairline bg-transparent px-3 py-2.5 text-[15px] outline-none focus:border-[var(--color-accent)]";
+  const update = useCallback((next: MenuDocument) => { setDoc(next); }, []);
+  const commit = useCallback((next: MenuDocument) => { setDoc(next); void saveWith(next); }, [saveWith]);
+  const saveNow = useCallback(() => { void saveWith(docRef.current); }, [saveWith]);
+
+  const go = useCallback((next: EditorSectionId, action?: "new-item") => {
+    if (action === "new-item") setPendingNewItem(true);
+    setSection(next);
+  }, []);
 
   if (!signedIn) return (
     <main className="min-h-screen md:grid md:grid-cols-[3fr_2fr]">
@@ -72,111 +150,102 @@ export default function AdminEditor({ initialDoc }: { initialDoc: MenuDocument }
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={restaurantConfig.firstBite.posterUrl} alt="" className="absolute inset-0 h-full w-full object-cover photo-grade" />
         <div className="absolute inset-x-0 bottom-0 h-2/3" style={{ background: "linear-gradient(to top, rgba(6,4,2,0.92), transparent)" }} />
-        <span className="absolute top-4 left-5 font-mono2 text-[10px] uppercase tracking-[0.26em] px-2 py-1 border hairline" style={{ background: "rgba(6,4,2,0.55)" }}>Owner editor · Demo mode</span>
+        <span className="absolute top-4 left-5 font-mono2 text-[13px] uppercase tracking-[0.26em] px-2 py-1 border hairline" style={{ background: "rgba(6,4,2,0.55)" }}>Owner editor · Demo mode</span>
         <h1 className="absolute bottom-4 left-5 font-display uppercase leading-[0.9] text-5xl md:text-7xl">{restaurantConfig.displayName.split(" ").map(w => <span key={w} className="block">{w}</span>)}</h1>
       </div>
       <div className="flex items-start md:items-center px-6 py-8 md:p-12">
         <div className="w-full max-w-sm">
           <h2 className="font-display uppercase text-3xl">Sign in</h2>
           <p className="mt-2 text-[15px] opacity-85 leading-relaxed">We email you a sign-in link for {restaurantConfig.editor.ownerEmail}. No password.</p>
-          <label className="block mt-7 text-sm font-semibold">Owner email
-            <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder={restaurantConfig.editor.ownerEmail} className={"mt-2 " + inputCls} />
+          <label className="block mt-7 text-[13px] font-semibold uppercase tracking-wide">Owner email
+            <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder={restaurantConfig.editor.ownerEmail} className="mt-2 w-full border hairline bg-transparent px-3 py-2.5 text-[15px] outline-none focus:border-[var(--color-accent)]" />
           </label>
-          <button onClick={() => setSignedIn(true)} className="mt-5 w-full py-3.5 font-mono2 text-sm font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Continue in demo mode</button>
-          <p className="font-mono2 text-[10px] uppercase tracking-[0.2em] opacity-60 mt-4">Demo mode. No email is sent. Your page is {restaurantConfig.registryState === "paused" ? "paused" : "live"}.</p>
+          <button onClick={() => setSignedIn(true)} className="mt-5 w-full py-3.5 font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Continue in demo mode</button>
+          <p className="font-mono2 text-[13px] uppercase tracking-[0.2em] opacity-60 mt-4">Demo mode. No email is sent.</p>
         </div>
       </div>
     </main>
   );
 
+  const saveLabel = saveState === "saving" ? "Saving..." : saveState === "error" ? "Retry save" : "Save changes";
+
   return (
-    <main className="min-h-screen px-5 py-6 max-w-3xl mx-auto">
-      <div className="flex items-start justify-between gap-4 pb-5 border-b hairline">
-        <div>
-          <p className="font-mono2 text-[10px] uppercase tracking-[0.26em]" style={{ color: "var(--color-accent)" }}>Owner editor · Demo mode</p>
-          <h1 className="font-display uppercase text-3xl leading-none mt-2">{restaurantConfig.displayName}</h1>
-          <p className="font-mono2 text-[11px] uppercase tracking-[0.16em] mt-2" style={{ color: "var(--color-accent2)" }}>Your page is live</p>
-          <p className="text-sm opacity-70 mt-1">Edits here are local demo state only.</p>
+    <div className="min-h-screen md:grid md:grid-cols-[248px_1fr]">
+      {/* Sidebar on wide screens */}
+      <aside className="hidden md:flex flex-col border-r hairline sticky top-0 h-screen" style={{ background: "var(--color-surface)" }}>
+        <div className="p-5 pb-4">
+          <p className="font-mono2 text-[13px] uppercase tracking-[0.22em]" style={{ color: "var(--color-accent)" }}>Owner editor</p>
+          <h1 className="font-display uppercase text-3xl leading-none mt-2">{doc.venue.name}</h1>
+          <span className="inline-block mt-3 font-mono2 text-[13px] font-bold uppercase tracking-wider px-2.5 py-1 border hairline" style={chip.live ? { color: "var(--color-accent2)" } : { background: "var(--color-accent)", color: "#0D0A07", borderColor: "transparent" }}>{chip.text}</span>
         </div>
-        <button onClick={() => setSignedIn(false)} className="text-sm border hairline px-4 py-2 shrink-0 font-semibold">Sign out</button>
-      </div>
-
-      <section className="mt-7 border hairline p-5 grain" style={{ background: "var(--color-surface)" }} aria-label="Photo storage">
-        <div className="flex justify-between items-baseline gap-3">
-          <h2 className="font-semibold">Photo storage</h2>
-          <span className="font-mono2 text-sm font-bold">{cloudPct}% used</span>
-        </div>
-        <div className="h-1.5 mt-3 overflow-hidden" style={{ background: "color-mix(in srgb, var(--color-ink) 12%, transparent)" }}>
-          <div className="h-full" style={{ width: cloudPct + "%", background: cloudPct >= 80 ? "var(--color-accent)" : "var(--color-accent2)" }} />
-        </div>
-        <p className="text-sm opacity-75 mt-2.5">{cloudPct >= 80 ? "You are near your photo limit. Delete old photos or upgrade your own Cloudinary plan to add more." : "Your own Cloudinary account. Text and price edits are unlimited. New uploads pause at the cap. Every photo you add is finished with the Claro realistic grade automatically, so it looks like food, not a snapshot."}</p>
-      </section>
-
-      <section className="mt-9" aria-label="Menu items">
-        <h2 className="font-display uppercase text-2xl">Menu items</h2>
-        <div className="mt-3 border-t hairline">
-          {doc.items.map(item => {
-            const av = availability.get(item.id);
-            const sold = !!av?.soldOut;
+        <nav className="flex-1 px-3 pb-4" aria-label="Editor sections">
+          {SECTIONS.map((s, i) => {
+            const current = section === s.id;
             return (
-              <article key={item.id} className="border-b hairline py-4">
-                <div className="flex gap-3.5">
-                  {item.photoUrl && /* eslint-disable-next-line @next/next/no-img-element */ <img src={item.photoUrl} alt="" className={"w-14 h-14 object-cover shrink-0 photo-grade " + (sold ? "grayscale" : "")} />}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-3">
-                      <h3 className="font-bold leading-tight">{item.name}</h3>
-                      <span className="font-mono2 text-[13px] shrink-0">{item.basePrice !== null ? formatPrice(item.basePrice, doc.venue.currency) : item.priceType === "market" ? formatPrice(item.todaysMarketPrice, doc.venue.currency) + " today" : "Set by options"}</span>
-                    </div>
-                    <div className="flex items-center gap-3 mt-2.5 flex-wrap">
-                      <button role="switch" aria-checked={sold} aria-label={"Sold out toggle for " + item.name}
-                        onClick={() => { const sel = document.getElementById("ret-" + item.id) as HTMLSelectElement | null; toggle86(item.id, (sel?.value as AutoReturnPreset) ?? "tomorrow"); }}
-                        className="relative w-12 h-7 rounded-full shrink-0 transition-colors" style={{ background: sold ? "var(--color-accent)" : "color-mix(in srgb, var(--color-ink) 22%, transparent)" }}>
-                        <span className="absolute top-1 w-5 h-5 rounded-full transition-all" style={{ left: sold ? "24px" : "4px", background: "var(--color-ink)" }} />
-                      </button>
-                      <span className="font-mono2 text-[10px] font-bold uppercase tracking-[0.18em]" style={{ color: sold ? "var(--color-accent)" : undefined }}>{sold ? "Sold out (86)" : "Available"}</span>
-                      <select defaultValue={av?.autoReturn ?? "tomorrow"} id={"ret-" + item.id} aria-label="Auto return when sold out" className="border hairline px-2 py-1.5 text-sm ml-auto" style={{ background: "var(--color-surface)" }}>
-                        <option value="end_of_service">Returns: end of service</option><option value="tomorrow">Returns: tomorrow</option><option value="indefinite">Returns: when I switch back</option><option value="custom">Returns: custom time</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-                <div className="grid sm:grid-cols-[170px_1fr] gap-3 mt-3.5">
-                  <label className="text-xs font-semibold uppercase tracking-wide opacity-90">Price ({doc.venue.currency})
-                    <input inputMode="numeric" value={item.basePrice ?? ""} placeholder={item.priceType === "market" ? "Market price" : "No fixed price"} onChange={e => setPrice(item.id, e.target.value)} className={"mt-1.5 font-mono2 " + inputCls} />
-                  </label>
-                  <div>
-                    <label className="text-xs font-semibold uppercase tracking-wide opacity-90">Photo URL
-                      <input value={item.photoUrl ?? ""} onChange={e => setPhoto(item.id, e.target.value)} className={"mt-1.5 " + inputCls} />
-                    </label>
-                    <div className="flex items-center gap-3 mt-2 flex-wrap">
-                      <label className={"border hairline px-4 py-2 font-mono2 text-[11px] font-bold uppercase tracking-wider " + (uploadsConfigured && uploadingId !== item.id ? "cursor-pointer" : "opacity-50")} aria-disabled={!uploadsConfigured || uploadingId === item.id}>
-                        {uploadingId === item.id ? "Uploading..." : "Upload photo"}
-                        <input type="file" accept="image/*" className="hidden" disabled={!uploadsConfigured || uploadingId === item.id}
-                          onChange={e => { uploadPhoto(item.id, e.target.files?.[0]); e.target.value = ""; }} />
-                      </label>
-                      {!uploadsConfigured && <span className="text-xs opacity-60 normal-case tracking-normal font-normal">Uploads switch on when the Cloudinary cloud name and unsigned preset are set.</span>}
-                    </div>
-                    {uploadError?.id === item.id && <p className="text-xs mt-2" style={{ color: "var(--color-accent)" }}>{uploadError.message}</p>}
-                  </div>
-                </div>
-                {doc.specials.some(s => s.targetItemIds.includes(item.id)) && <p className="font-mono2 text-[10px] uppercase tracking-[0.16em] mt-3" style={{ color: "var(--color-accent2)" }}>On special: {doc.specials.filter(s => s.targetItemIds.includes(item.id)).map(s => s.name).join(", ")}</p>}
-              </article>
+              <button key={s.id} type="button" onClick={() => go(s.id)} aria-current={current ? "page" : undefined}
+                className="w-full text-left flex items-baseline gap-3 px-3 py-3 border-l-2"
+                style={current ? { borderColor: "var(--color-accent)", background: "color-mix(in srgb, var(--color-accent) 12%, transparent)" } : { borderColor: "transparent" }}>
+                <span className="font-mono2 text-[13px]" style={{ color: current ? "var(--color-accent)" : undefined }}>{String(i + 1).padStart(2, "0")}</span>
+                <span className="font-semibold text-[15px]">{s.label}</span>
+              </button>
             );
           })}
+        </nav>
+        <div className="p-4 border-t hairline">
+          <button onClick={() => setSignedIn(false)} className="text-[13px] border hairline px-4 py-2 font-semibold w-full">Sign out</button>
         </div>
-        <p className="text-xs opacity-60 mt-3">Specials are scheduled price rules in the data model, not edited copies of an item. Schedules are managed in the full editor build.</p>
-      </section>
+      </aside>
 
-      <section className="mt-10 border hairline p-5 grain" style={{ background: "var(--color-surface)" }} aria-label="QR code">
-        <h2 className="font-display uppercase text-2xl">Your menu QR code</h2>
-        <p className="text-sm opacity-80 mt-1.5">Free to download and print. It points at your own domain: <span className="font-mono2 text-[13px]">{menuUrl}</span></p>
-        {qrPng && /* eslint-disable-next-line @next/next/no-img-element */ <img src={qrPng} alt={"QR code for " + menuUrl} className="w-44 h-44 mt-4 bg-white p-2" />}
-        <div className="flex gap-2.5 mt-5 flex-wrap">
-          {qrPng && <a href={qrPng} download="menu-qr.png" className="px-6 py-3 font-mono2 text-sm font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Download PNG</a>}
-          {qrSvg && <button onClick={downloadSvg} className="px-6 py-3 border hairline font-mono2 text-sm font-bold uppercase tracking-wider">Download SVG</button>}
-        </div>
-        <p className="text-xs opacity-60 mt-3">PNG is print ready at table size.</p>
-      </section>
-    </main>
+      <div className="min-w-0">
+        {/* Header: identity, save state, save action. Sticky on all sizes. */}
+        <header className="sticky top-0 z-40 border-b hairline" style={{ background: "var(--color-bg)" }}>
+          <div className="px-5 pt-4 pb-3 flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0 md:hidden">
+              <p className="font-mono2 text-[13px] uppercase tracking-[0.22em]" style={{ color: "var(--color-accent)" }}>Owner editor</p>
+              <h1 className="font-display uppercase text-2xl leading-none mt-1.5 truncate">{doc.venue.name}</h1>
+            </div>
+            <div className="hidden md:block">
+              <p className="font-serif2 italic text-lg opacity-85 leading-tight">{section === "overview" ? "Good to see you. Here is your menu today." : SECTIONS.find(s => s.id === section)?.label}</p>
+            </div>
+            <div className="flex items-center gap-2.5 flex-wrap ml-auto">
+              <span className="font-mono2 text-[13px] uppercase tracking-wider md:hidden px-2 py-1 border hairline" style={chip.live ? { color: "var(--color-accent2)" } : { background: "var(--color-accent)", color: "#0D0A07", borderColor: "transparent" }}>{chip.text}</span>
+              <span className="font-mono2 text-[13px] uppercase tracking-wider" role="status" style={{ color: saveState === "error" ? "var(--color-accent)" : saveState === "dirty" ? "var(--color-accent2)" : undefined }}>
+                {saveState === "saving" ? "Saving..." : saveState === "error" ? "Save failed" : dirty ? "Unsaved changes" : saveMessage || "All changes saved"}
+              </span>
+              <button type="button" onClick={saveNow} disabled={!dirty && saveState !== "error" || saveState === "saving"}
+                className="px-4 py-2.5 font-mono2 text-[13px] font-bold uppercase tracking-wider disabled:opacity-40"
+                style={{ background: "var(--color-accent)", color: "#0D0A07" }}>
+                {saveLabel}
+              </button>
+              <button onClick={() => setSignedIn(false)} className="md:hidden text-[13px] border hairline px-3 py-2.5 font-semibold">Sign out</button>
+            </div>
+          </div>
+          {saveState === "error" && <p className="px-5 pb-3 text-[13px]" style={{ color: "var(--color-accent)" }} role="alert">{saveMessage} Your work is still on this screen. Tap Retry save.</p>}
+          {/* Tab row on phones and small tablets */}
+          <nav className="md:hidden flex gap-1.5 overflow-x-auto no-scrollbar px-5 pb-3" aria-label="Editor sections">
+            {SECTIONS.map(s => {
+              const current = section === s.id;
+              return (
+                <button key={s.id} type="button" onClick={() => go(s.id)} aria-current={current ? "page" : undefined}
+                  className="shrink-0 px-4 py-2.5 font-mono2 text-[13px] font-bold uppercase tracking-wider border"
+                  style={current ? { background: "var(--color-accent)", color: "#0D0A07", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--color-ink) 20%, transparent)" }}>
+                  {s.short}
+                </button>
+              );
+            })}
+          </nav>
+        </header>
+
+        <main className="px-5 py-7 md:px-10 md:py-9 max-w-3xl">
+          {section === "overview" && <OverviewSection doc={doc} go={go} />}
+          {section === "menus" && <MenusSection doc={doc} onChange={update} onCommit={commit} />}
+          {section === "items" && <ItemsSection doc={doc} onCommit={commit} startNewItem={pendingNewItem} onConsumeStartNew={() => setPendingNewItem(false)} />}
+          {section === "specials" && <SpecialsSection doc={doc} onCommit={commit} />}
+          {section === "availability" && <AvailabilitySection doc={doc} onCommit={commit} />}
+          {section === "qr" && <QrSection />}
+          {section === "settings" && <SettingsSection doc={doc} onCommit={commit} />}
+        </main>
+      </div>
+    </div>
   );
 }
