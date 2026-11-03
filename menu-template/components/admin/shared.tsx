@@ -17,8 +17,10 @@ export function uid(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${counter.toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
 }
 
+// 16px text on inputs: under 16px, iPhones zoom the page on focus
+// (Design Motion bench, folded into the fullstack skill Nov 3, 2026).
 export const inputCls =
-  "w-full border hairline bg-transparent px-3 py-2.5 text-[15px] outline-none focus:border-[var(--color-accent)] rounded-none";
+  "w-full border hairline bg-transparent px-3 py-2.5 text-base outline-none focus:border-[var(--color-accent)] rounded-none";
 export const labelCls = "block text-[13px] font-semibold uppercase tracking-wide opacity-90";
 export const primaryBtn =
   "px-5 py-3 font-mono2 text-[13px] font-bold uppercase tracking-wider disabled:opacity-50";
@@ -63,7 +65,9 @@ export function SectionTitle({ eyebrow, title, children }: { eyebrow: string; ti
   );
 }
 
-// Big, thumb-friendly sold-out / on-off switch. Flame when on.
+// Big, thumb-friendly sold-out / on-off switch. Flame when on. The hit
+// area is 64 by 44px even though the visible track is smaller: touch
+// targets pad to 44px per the interaction bench.
 export function BigToggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
     <button
@@ -72,11 +76,26 @@ export function BigToggle({ on, onChange, label }: { on: boolean; onChange: (v: 
       aria-checked={on}
       aria-label={label}
       onClick={() => onChange(!on)}
-      className="relative w-14 h-8 rounded-full shrink-0 transition-colors"
-      style={{ background: on ? "var(--color-accent)" : "color-mix(in srgb, var(--color-ink) 25%, transparent)" }}
+      className="relative w-16 h-11 shrink-0"
     >
-      <span className="absolute top-1 w-6 h-6 rounded-full transition-all" style={{ left: on ? "26px" : "4px", background: "var(--color-ink)" }} />
+      <span className="absolute left-1 top-1/2 -translate-y-1/2 w-14 h-8 rounded-full transition-colors" style={{ background: on ? "var(--color-accent)" : "color-mix(in srgb, var(--color-ink) 25%, transparent)" }} />
+      <span className="absolute top-1/2 -translate-y-1/2 w-6 h-6 rounded-full transition-all" style={{ left: on ? "34px" : "8px", background: "var(--color-ink)" }} />
     </button>
+  );
+}
+
+// Delete feedback with a way back. Per the interaction bench, undo beats
+// a confirmation dialog for anything reversible: the delete happens at
+// once, and this bar offers Undo for 10 seconds. The owning section
+// holds the pre-delete snapshot and clears this after the timeout.
+export function UndoToast({ message, onUndo }: { message: string; onUndo: () => void }) {
+  return (
+    <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-4 px-5 py-3 border hairline max-w-[92vw]" style={{ background: "var(--color-surface)" }} role="status">
+      <span className="text-[15px]">{message}</span>
+      <button type="button" onClick={onUndo} className="font-mono2 text-[13px] font-bold uppercase tracking-wider px-3 py-2 shrink-0" style={{ color: "var(--color-accent)" }}>
+        Undo
+      </button>
+    </div>
   );
 }
 
@@ -92,7 +111,7 @@ export function DayChips({ days, onChange }: { days: number[]; onChange: (days: 
             type="button"
             aria-pressed={active}
             onClick={() => onChange(active ? days.filter(x => x !== d) : [...days, d].sort((a, b) => a - b))}
-            className="min-w-11 px-2 py-2.5 font-mono2 text-[13px] font-bold uppercase tracking-wide border"
+            className="min-w-11 min-h-11 inline-flex items-center justify-center px-2 py-2.5 font-mono2 text-[13px] font-bold uppercase tracking-wide border"
             style={active ? { background: "var(--color-accent)", color: "#0D0A07", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--color-ink) 20%, transparent)" }}
           >
             {name}
@@ -121,7 +140,7 @@ export function ChipMultiSelect<T extends string>({ options, value, onChange, fo
             type="button"
             aria-pressed={active}
             onClick={() => onChange(active ? value.filter(x => x !== opt) : [...value, opt])}
-            className="px-3 py-2 text-[13px] font-semibold border capitalize"
+            className="px-3 py-2 min-h-11 inline-flex items-center text-[13px] font-semibold border capitalize"
             style={active ? { background: "var(--color-ink)", color: "var(--color-bg)", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--color-ink) 20%, transparent)" }}
           >
             {label(opt)}

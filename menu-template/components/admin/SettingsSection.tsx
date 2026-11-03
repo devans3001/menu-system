@@ -1,27 +1,42 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MenuDocument } from "../../lib/types";
 import { restaurantConfig } from "../../restaurant.config";
-import { Field, PrimaryButton, SectionTitle, inputCls } from "./shared";
+import { Field, SectionTitle, inputCls } from "./shared";
 
 // Settings: the venue's own words. Display name and holding page copy
-// live in the menu document and save through the editor's save path.
-// Setup facts (domain, currency, owner email) are shown for reference;
-// they change at setup, not here. The photo storage meter is an honest
-// placeholder: a live reading needs the Cloudinary Admin API and
-// connects at the first client setup.
+// live in the menu document. Like everywhere else in this editor since
+// Nov 3, 2026, they autosave (debounced) through the editor's one save
+// path; there is no separate Save button here to disagree with the
+// header state. Setup facts (domain, currency, owner email) are shown
+// for reference; they change at setup, not here. The photo storage
+// meter is an honest placeholder: a live reading needs the Cloudinary
+// Admin API and connects at the first client setup.
 export default function SettingsSection({ doc, onCommit }: { doc: MenuDocument; onCommit: (next: MenuDocument) => void }) {
   const [name, setName] = useState(doc.venue.name);
   const [holding, setHolding] = useState(doc.venue.holdingMessage ?? "");
   const [cloudPct] = useState(34); // placeholder meter reading; live usage needs the Cloudinary Admin API (key + secret), connected at first client setup
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSaved = useRef({ name: doc.venue.name, holding: doc.venue.holdingMessage ?? "" });
 
-  const dirty = name !== doc.venue.name || holding !== (doc.venue.holdingMessage ?? "");
+  const dirty = name !== lastSaved.current.name || holding !== lastSaved.current.holding;
 
-  function save() {
-    const next = structuredClone(doc);
-    next.venue = { ...next.venue, name: name.trim() || doc.venue.name, holdingMessage: holding.trim() || undefined };
-    onCommit(next);
-  }
+  // Debounced autosave, the same rhythm as the shell: pause typing for
+  // a moment and the change writes itself through.
+  useEffect(() => {
+    if (!dirty) return;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      const trimmed = name.trim();
+      if (!trimmed) return; // a venue name cannot be blank; the header guard says so too
+      const next = structuredClone(doc);
+      next.venue = { ...next.venue, name: trimmed, holdingMessage: holding.trim() || undefined };
+      lastSaved.current = { name, holding };
+      onCommit(next);
+    }, 800);
+    return () => { if (timer.current) clearTimeout(timer.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, holding, dirty]);
 
   const facts: { label: string; value: string }[] = [
     { label: "Menu address", value: "https://" + restaurantConfig.domain.primary + "/" },
@@ -42,9 +57,9 @@ export default function SettingsSection({ doc, onCommit }: { doc: MenuDocument; 
         <Field label="What the holding page shows" hint="When your page is paused, guests see this instead of the menu. Write it the way you would say it at the door.">
           <textarea value={holding} onChange={e => setHolding(e.target.value)} className={inputCls} rows={3} placeholder="Please check back soon. If you are at the restaurant, a member of the team can help you with today's menu." />
         </Field>
-        <div>
-          <PrimaryButton onClick={save} disabled={!dirty || !name.trim()}>Save settings</PrimaryButton>
-        </div>
+        <p className="font-mono2 text-[13px] uppercase tracking-wider" role="status" style={{ color: dirty ? "var(--color-accent2)" : undefined }}>
+          {dirty ? "Unsaved changes, saving shortly" : "Changes here save automatically"}
+        </p>
       </div>
 
       <section className="mt-10 border hairline p-5 grain max-w-xl" style={{ background: "var(--color-surface)" }} aria-label="Photo storage">

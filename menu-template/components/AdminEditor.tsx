@@ -11,27 +11,46 @@ import QrSection from "./admin/QrSection";
 import SettingsSection from "./admin/SettingsSection";
 import type { EditorSectionId } from "./admin/shared";
 
-// Owner editor shell. One document, seven rooms: Overview, Menus, Items,
-// Specials, Availability, QR and Links, Settings. The document loads from
-// /api/menu, and saves write the whole document back through /api/menu
-// PUT, which persists to the Neon menus row when DATABASE_URL is set.
-// Structural changes (new dish, 86 toggle, special, menu add) save on
-// their own; field edits collect under the Save button with an
-// unmistakable state. Sign-in stays demo mode until magic links wire.
+// Owner editor shell. One document, seven rooms: Overview, Menus,
+// Dishes, Specials, Sold out, QR and Links, Settings. The document loads
+// from /api/menu. ONE save model everywhere (decided Nov 3, 2026 after
+// the usability pass found two models fighting): every change autosaves
+// through /api/menu PUT into the Neon menus row when DATABASE_URL is
+// set, debounced about 800ms, with the state always visible in the
+// header (unsaved, saving, saved with time, failed with retry). There
+// is no Save button to hunt for and none that sits dead. Sign-in stays
+// demo mode until magic links wire.
+//
+// First run (Nov 3, 2026, Evans's first-run tour standard, fullstack
+// skill): a first-time owner gets a short tour on first open, skippable
+// at any step, remembered per device, replayable from Overview; under
+// it sits a self-ticking "Get your menu ready" checklist on Overview.
 const SECTIONS: { id: EditorSectionId; label: string; short: string }[] = [
   { id: "overview", label: "Overview", short: "Overview" },
   { id: "menus", label: "Menus", short: "Menus" },
-  { id: "items", label: "Items", short: "Items" },
+  { id: "items", label: "Dishes", short: "Dishes" },
   { id: "specials", label: "Specials", short: "Specials" },
-  { id: "availability", label: "Availability", short: "86 Board" },
+  { id: "availability", label: "Sold out", short: "Sold out" },
   { id: "qr", label: "QR and Links", short: "QR + Links" },
   { id: "settings", label: "Settings", short: "Settings" },
 ];
 
+const TOUR_KEY = `claro-menu-tour-v1:${restaurantConfig.domain.primary}`;
+const FIRSTRUN_KEY = `claro-menu-firstrun-v1:${restaurantConfig.domain.primary}`;
+
+const TOUR_STEPS: { section: EditorSectionId; title: string; body: string }[] = [
+  { section: "overview", title: "Welcome to your menu editor", body: "Everything your guests see on your menu page is controlled from here, on your phone. This short walk shows you the four jobs that matter. Skip it any time." },
+  { section: "items", title: "Your dishes live here", body: "Tap Add food to put a new dish on the menu with its photo and price. To change just a price later, tap the price itself, type the new one, and you are done." },
+  { section: "availability", title: "When the kitchen runs out", body: "Open Sold out and tap the dish. Guests see it marked sold out at once, and it comes back when you say: end of service, tomorrow, or when you switch it back." },
+  { section: "specials", title: "Offers run themselves", body: "A special is a timed offer, like happy hour. Set it once with its days and hours, and it switches itself on and off. Your normal prices are never touched." },
+  { section: "qr", title: "Put your link everywhere", body: "Download the QR code for your tables, and paste your menu link into your Instagram bio and Google profile. That is how guests find the menu." },
+];
+
 type SaveState = "clean" | "dirty" | "saving" | "saved" | "error";
+export interface FirstRunFlags { viewedLive: boolean; visitedQr: boolean }
 
 // Shape guard before any save: a corrupt document must never reach the
-// database. Mirrors the promises the item and special forms already make.
+// database. Mirrors the promises the dish and special forms already make.
 function validateDocument(doc: MenuDocument): string | null {
   const sectionIds = new Set(doc.sections.map(s => s.id));
   for (const m of doc.menus) {
@@ -63,6 +82,42 @@ function billingChip(state: string): { text: string; live: boolean } {
   }
 }
 
+function FirstRunTour({ step, onStep, onClose }: { step: number; onStep: (n: number) => void; onClose: () => void }) {
+  const s = TOUR_STEPS[step];
+  const last = step === TOUR_STEPS.length - 1;
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-[70] p-4 pb-6" role="dialog" aria-label="Welcome tour">
+      <div className="max-w-xl mx-auto border hairline p-5" style={{ background: "var(--color-surface)" }}>
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="font-mono2 text-[13px] uppercase tracking-[0.22em]" style={{ color: "var(--color-accent)" }}>
+            Step {step + 1} of {TOUR_STEPS.length}
+          </p>
+          <button type="button" onClick={onClose} className="font-mono2 text-[13px] font-bold uppercase tracking-wider px-2 py-1 opacity-80">
+            Skip tour
+          </button>
+        </div>
+        <h2 className="font-display uppercase text-3xl leading-none mt-3">{s.title}</h2>
+        <p className="text-[15px] leading-relaxed mt-2.5 opacity-90">{s.body}</p>
+        <div className="flex gap-2.5 mt-5">
+          {step > 0 && (
+            <button type="button" onClick={() => onStep(step - 1)} className="px-4 py-3 border hairline font-mono2 text-[13px] font-bold uppercase tracking-wider">
+              Back
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => (last ? onClose() : onStep(step + 1))}
+            className="flex-1 px-4 py-3 font-mono2 text-[13px] font-bold uppercase tracking-wider"
+            style={{ background: "var(--color-accent)", color: "#0D0A07" }}
+          >
+            {last ? "Finish, show my overview" : "Next"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminEditor({ initialDoc, billingState }: { initialDoc: MenuDocument; billingState?: string }) {
   const [doc, setDoc] = useState<MenuDocument>(() => structuredClone(initialDoc));
   const [savedJson, setSavedJson] = useState<string>(() => JSON.stringify(initialDoc));
@@ -72,9 +127,13 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
   const [signedIn, setSignedIn] = useState(false);
   const [section, setSection] = useState<EditorSectionId>("overview");
   const [pendingNewItem, setPendingNewItem] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
+  const [flags, setFlags] = useState<FirstRunFlags>({ viewedLive: false, visitedQr: false });
   const docRef = useRef(doc);
   docRef.current = doc;
   const savingRef = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dirty = useMemo(() => JSON.stringify(doc) !== savedJson, [doc, savedJson]);
   const chip = billingChip(billingState ?? "demo");
@@ -92,8 +151,44 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
         setSaveState("clean");
       })
       .catch(() => { /* keep the server-rendered copy */ });
+    try {
+      const raw = window.localStorage.getItem(FIRSTRUN_KEY);
+      if (raw) setFlags({ viewedLive: false, visitedQr: false, ...JSON.parse(raw) });
+    } catch { /* flags are a nicety, never a blocker */ }
     return () => { cancelled = true; };
   }, []);
+
+  const setFlag = useCallback((patch: Partial<FirstRunFlags>) => {
+    setFlags(prev => {
+      const next = { ...prev, ...patch };
+      try { window.localStorage.setItem(FIRSTRUN_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
+  // Visiting the QR room ticks that checklist job on its own.
+  useEffect(() => { if (section === "qr") setFlag({ visitedQr: true }); }, [section, setFlag]);
+
+  // First open after sign-in: offer the tour once per device.
+  useEffect(() => {
+    if (!signedIn) return;
+    try {
+      if (!window.localStorage.getItem(TOUR_KEY)) { setTourStep(0); setTourOpen(true); }
+    } catch { /* if storage is unavailable the tour simply does not nag */ }
+  }, [signedIn]);
+
+  const closeTour = useCallback(() => {
+    try { window.localStorage.setItem(TOUR_KEY, new Date().toISOString()); } catch { /* ignore */ }
+    setTourOpen(false);
+    setSection("overview");
+  }, []);
+
+  const goTourStep = useCallback((n: number) => {
+    setTourStep(n);
+    setSection(TOUR_STEPS[n].section);
+  }, []);
+
+  const replayTour = useCallback(() => { setTourStep(0); setTourOpen(true); setSection("overview"); }, []);
 
   useEffect(() => {
     if (dirty && saveState !== "saving" && saveState !== "error") setSaveState("dirty");
@@ -135,9 +230,23 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
     }
   }, []);
 
+  // The one save model: edits debounce about 800ms, then save on their
+  // own. Structural changes (commit) skip the wait and save at once.
+  // A failed save does not auto-retry in a loop; the header offers Retry.
+  useEffect(() => {
+    if (!dirty || saveState === "saving" || saveState === "error") return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { void saveWith(docRef.current); }, 800);
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, [dirty, doc, saveState, saveWith]);
+
   const update = useCallback((next: MenuDocument) => { setDoc(next); }, []);
-  const commit = useCallback((next: MenuDocument) => { setDoc(next); void saveWith(next); }, [saveWith]);
-  const saveNow = useCallback(() => { void saveWith(docRef.current); }, [saveWith]);
+  const commit = useCallback((next: MenuDocument) => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setDoc(next);
+    void saveWith(next);
+  }, [saveWith]);
+  const retrySave = useCallback(() => { void saveWith(docRef.current); }, [saveWith]);
 
   const go = useCallback((next: EditorSectionId, action?: "new-item") => {
     if (action === "new-item") setPendingNewItem(true);
@@ -158,7 +267,7 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
           <h2 className="font-display uppercase text-3xl">Sign in</h2>
           <p className="mt-2 text-[15px] opacity-85 leading-relaxed">We email you a sign-in link for {restaurantConfig.editor.ownerEmail}. No password.</p>
           <label className="block mt-7 text-[13px] font-semibold uppercase tracking-wide">Owner email
-            <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder={restaurantConfig.editor.ownerEmail} className="mt-2 w-full border hairline bg-transparent px-3 py-2.5 text-[15px] outline-none focus:border-[var(--color-accent)]" />
+            <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder={restaurantConfig.editor.ownerEmail} className="mt-2 w-full border hairline bg-transparent px-3 py-2.5 text-base outline-none focus:border-[var(--color-accent)]" />
           </label>
           <button onClick={() => setSignedIn(true)} className="mt-5 w-full py-3.5 font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Continue in demo mode</button>
           <p className="font-mono2 text-[13px] uppercase tracking-[0.2em] opacity-60 mt-4">Demo mode. No email is sent.</p>
@@ -166,8 +275,6 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
       </div>
     </main>
   );
-
-  const saveLabel = saveState === "saving" ? "Saving..." : saveState === "error" ? "Retry save" : "Save changes";
 
   return (
     <div className="min-h-screen md:grid md:grid-cols-[248px_1fr]">
@@ -197,7 +304,7 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
       </aside>
 
       <div className="min-w-0">
-        {/* Header: identity, save state, save action. Sticky on all sizes. */}
+        {/* Header: identity and the always-visible save state. Sticky. */}
         <header className="sticky top-0 z-40 border-b hairline" style={{ background: "var(--color-bg)" }}>
           <div className="px-5 pt-4 pb-3 flex items-start justify-between gap-3 flex-wrap">
             <div className="min-w-0 md:hidden">
@@ -210,13 +317,15 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
             <div className="flex items-center gap-2.5 flex-wrap ml-auto">
               <span className="font-mono2 text-[13px] uppercase tracking-wider md:hidden px-2 py-1 border hairline" style={chip.live ? { color: "var(--color-accent2)" } : { background: "var(--color-accent)", color: "#0D0A07", borderColor: "transparent" }}>{chip.text}</span>
               <span className="font-mono2 text-[13px] uppercase tracking-wider" role="status" style={{ color: saveState === "error" ? "var(--color-accent)" : saveState === "dirty" ? "var(--color-accent2)" : undefined }}>
-                {saveState === "saving" ? "Saving..." : saveState === "error" ? "Save failed" : dirty ? "Unsaved changes" : saveMessage || "All changes saved"}
+                {saveState === "saving" ? "Saving..." : saveState === "error" ? "Save failed" : dirty ? "Unsaved changes, saving shortly" : saveMessage || "All changes saved"}
               </span>
-              <button type="button" onClick={saveNow} disabled={!dirty && saveState !== "error" || saveState === "saving"}
-                className="px-4 py-2.5 font-mono2 text-[13px] font-bold uppercase tracking-wider disabled:opacity-40"
-                style={{ background: "var(--color-accent)", color: "#0D0A07" }}>
-                {saveLabel}
-              </button>
+              {saveState === "error" && (
+                <button type="button" onClick={retrySave}
+                  className="px-4 py-2.5 font-mono2 text-[13px] font-bold uppercase tracking-wider"
+                  style={{ background: "var(--color-accent)", color: "#0D0A07" }}>
+                  Retry save
+                </button>
+              )}
               <button onClick={() => setSignedIn(false)} className="md:hidden text-[13px] border hairline px-3 py-2.5 font-semibold">Sign out</button>
             </div>
           </div>
@@ -227,7 +336,7 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
               const current = section === s.id;
               return (
                 <button key={s.id} type="button" onClick={() => go(s.id)} aria-current={current ? "page" : undefined}
-                  className="shrink-0 px-4 py-2.5 font-mono2 text-[13px] font-bold uppercase tracking-wider border"
+                  className="shrink-0 px-4 py-2.5 min-h-11 font-mono2 text-[13px] font-bold uppercase tracking-wider border"
                   style={current ? { background: "var(--color-accent)", color: "#0D0A07", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--color-ink) 20%, transparent)" }}>
                   {s.short}
                 </button>
@@ -237,7 +346,7 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
         </header>
 
         <main className="px-5 py-7 md:px-10 md:py-9 max-w-3xl">
-          {section === "overview" && <OverviewSection doc={doc} go={go} />}
+          {section === "overview" && <OverviewSection doc={doc} go={go} flags={flags} onViewLive={() => setFlag({ viewedLive: true })} onReplayTour={replayTour} />}
           {section === "menus" && <MenusSection doc={doc} onChange={update} onCommit={commit} />}
           {section === "items" && <ItemsSection doc={doc} onCommit={commit} startNewItem={pendingNewItem} onConsumeStartNew={() => setPendingNewItem(false)} />}
           {section === "specials" && <SpecialsSection doc={doc} onCommit={commit} />}
@@ -246,6 +355,8 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
           {section === "settings" && <SettingsSection doc={doc} onCommit={commit} />}
         </main>
       </div>
+
+      {tourOpen && <FirstRunTour step={tourStep} onStep={goTourStep} onClose={closeTour} />}
     </div>
   );
 }

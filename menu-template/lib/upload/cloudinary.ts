@@ -25,20 +25,33 @@ export function cloudinaryUploadConfigured(): boolean {
   );
 }
 
-export async function uploadPhotoToCloudinary(file: File, folder?: string): Promise<string> {
+// Upload with real progress. fetch cannot report upload progress, so
+// this rides XMLHttpRequest: the editor shows percent while the photo
+// travels, and a failure leaves the file in the owner's hand to retry
+// in place (upload is a system of states, per the fullstack skill).
+export function uploadPhotoToCloudinary(file: File, folder?: string, onProgress?: (pct: number) => void): Promise<string> {
   const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
   const preset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
   if (!cloudName || !preset) {
-    throw new Error("Cloudinary upload is not configured. Set NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME and NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET.");
+    return Promise.reject(new Error("Photo uploads are not switched on yet. Ask Claro & Co to connect your photo account."));
   }
   const form = new FormData();
   form.append("file", file);
   form.append("upload_preset", preset);
   if (folder) form.append("folder", folder);
-  const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, { method: "POST", body: form });
-  const data = (await res.json().catch(() => null)) as { secure_url?: string; error?: { message?: string } } | null;
-  if (!res.ok || !data?.secure_url) {
-    throw new Error(data?.error?.message ?? `Cloudinary upload failed (HTTP ${res.status}).`);
-  }
-  return gradedPhotoUrl(String(data.secure_url));
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`);
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let data: { secure_url?: string; error?: { message?: string } } | null = null;
+      try { data = JSON.parse(xhr.responseText); } catch { /* keep null */ }
+      if (xhr.status >= 200 && xhr.status < 300 && data?.secure_url) resolve(gradedPhotoUrl(String(data.secure_url)));
+      else reject(new Error(data?.error?.message ?? `The upload did not finish (HTTP ${xhr.status}). Your photo is still here, tap Try again.`));
+    };
+    xhr.onerror = () => reject(new Error("The upload did not finish. Check your connection, your photo is still here, tap Try again."));
+    xhr.send(form);
+  });
 }

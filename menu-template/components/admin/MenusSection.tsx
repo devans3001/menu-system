@@ -1,19 +1,26 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MenuDocument, MenuEntity } from "../../lib/types";
-import { DayChips, EmptyState, Field, PrimaryButton, SectionTitle, inputCls, scheduleSummary, uid } from "./shared";
+import { DayChips, EmptyState, Field, PrimaryButton, SectionTitle, UndoToast, inputCls, scheduleSummary, uid } from "./shared";
 
 // Menus: the venue can run several (lunch, dinner, late night). Each has
 // its own days and hours; when schedules overlap the guest side shows the
-// highest precedence menu. Field edits here mark the document dirty and
-// save with the editor's Save button; adding or removing a menu saves
-// straight away.
+// highest precedence menu. Every change here autosaves like the rest of
+// the editor (the one save model, Nov 3, 2026). Removing a menu offers
+// Undo for 10 seconds instead of a browser confirm box, and the Add
+// button never sits dead: it always answers, with the reason when the
+// name is missing.
 export default function MenusSection({ doc, onChange, onCommit }: {
   doc: MenuDocument;
   onChange: (next: MenuDocument) => void;
   onCommit: (next: MenuDocument) => void;
 }) {
   const [newName, setNewName] = useState("");
+  const [addError, setAddError] = useState("");
+  const [undo, setUndo] = useState<{ snapshot: MenuDocument; label: string } | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
 
   function patchMenu(id: string, patch: Partial<MenuEntity>) {
     onChange({ ...doc, menus: doc.menus.map(m => (m.id === id ? { ...m, ...patch } : m)) });
@@ -23,7 +30,8 @@ export default function MenusSection({ doc, onChange, onCommit }: {
   }
   function addMenu() {
     const name = newName.trim();
-    if (!name) return;
+    if (!name) { setAddError("Give the menu a name first, like Brunch or Late Night."); return; }
+    setAddError("");
     const menu: MenuEntity = {
       id: uid("menu"),
       venueId: doc.venue.id,
@@ -38,8 +46,16 @@ export default function MenusSection({ doc, onChange, onCommit }: {
     onCommit({ ...doc, menus: [...doc.menus, menu] });
   }
   function removeMenu(menu: MenuEntity) {
-    if (!window.confirm(`Remove the ${menu.name} menu? Its sections and dishes stay, they just stop appearing on this menu.`)) return;
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setUndo({ snapshot: structuredClone(doc), label: `${menu.name} menu removed. Its sections and dishes are untouched.` });
+    undoTimer.current = setTimeout(() => setUndo(null), 10000);
     onCommit({ ...doc, menus: doc.menus.filter(m => m.id !== menu.id) });
+  }
+  function doUndo() {
+    if (!undo) return;
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    onCommit(undo.snapshot);
+    setUndo(null);
   }
 
   return (
@@ -47,7 +63,7 @@ export default function MenusSection({ doc, onChange, onCommit }: {
       <SectionTitle eyebrow="When each menu runs" title="Menus" />
       <p className="mt-3 text-[15px] opacity-80 leading-relaxed max-w-xl">
         Guests always see one menu at a time: the one whose day and hours match the moment. Tick the sections each menu should carry.
-        Name, hours and section changes save with the Save button at the top.
+        Every change here saves itself as you make it.
       </p>
 
       <div className="mt-7 grid gap-6">
@@ -103,7 +119,7 @@ export default function MenusSection({ doc, onChange, onCommit }: {
                     return (
                       <button key={sec.id} type="button" aria-pressed={on}
                         onClick={() => patchMenu(menu.id, { sectionIds: on ? menu.sectionIds.filter(id => id !== sec.id) : [...menu.sectionIds, sec.id] })}
-                        className="px-3 py-2.5 text-[13px] font-semibold border"
+                        className="px-3 py-2.5 min-h-11 text-[13px] font-semibold border"
                         style={on ? { background: "var(--color-ink)", color: "var(--color-bg)", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--color-ink) 20%, transparent)" }}>
                         {sec.name}
                       </button>
@@ -131,10 +147,13 @@ export default function MenusSection({ doc, onChange, onCommit }: {
         <h3 className="font-display uppercase text-2xl">Add a menu</h3>
         <p className="text-[15px] opacity-75 mt-2 max-w-lg leading-relaxed">A brunch menu, a Ramadan menu, a late night menu. It starts empty: give it hours above, then tick its sections.</p>
         <div className="flex gap-2.5 mt-4 flex-wrap">
-          <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Menu name, e.g. Brunch" className={inputCls} style={{ maxWidth: 320 }} aria-label="New menu name" />
-          <PrimaryButton onClick={addMenu} disabled={!newName.trim()}>Add menu</PrimaryButton>
+          <input value={newName} onChange={e => { setNewName(e.target.value); if (addError) setAddError(""); }} placeholder="Menu name, e.g. Brunch" className={inputCls} style={{ maxWidth: 320 }} aria-label="New menu name" />
+          <PrimaryButton onClick={addMenu}>Add menu</PrimaryButton>
         </div>
+        {addError && <p className="text-[13px] mt-2.5" style={{ color: "var(--color-accent)" }} role="alert">{addError}</p>}
       </div>
+
+      {undo && <UndoToast message={undo.label} onUndo={doUndo} />}
 
       {doc.menus.length === 0 && <div className="mt-6"><EmptyState title="No menus yet" body="Add your first menu above. Guests cannot see anything until a menu carries at least one section." /></div>}
     </div>

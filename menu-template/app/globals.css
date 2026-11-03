@@ -14,6 +14,12 @@ body { background: var(--color-bg); color: var(--color-ink); font-family: var(--
 .font-mono2 { font-family: var(--f-mono), ui-monospace, monospace; }
 ::selection { background: var(--color-accent); color: #0D0A07; }
 
+/* Designed focus (interaction bench): a visible 2px ring with offset on
+   keyboard focus, on every interactive element, light or dark. Mouse
+   users are not punished for it because this is :focus-visible. */
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
 /* Grain: true material texture over dark panels, never a flat sterile fill */
 .grain { position: relative; }
 .grain::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0.55; mix-blend-mode: overlay; z-index: 1;

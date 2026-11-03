@@ -48,3 +48,16 @@ CREATE TABLE IF NOT EXISTS payment_events (
 );
 CREATE INDEX IF NOT EXISTS payment_events_slug_idx ON payment_events(slug, received_at DESC);
 CREATE INDEX IF NOT EXISTS payment_events_type_idx ON payment_events(event_type, received_at DESC);
+
+-- Subscriptions that arrived before their menu could be identified.
+-- Paystack's subscription.create has no metadata slug, so the billing
+-- service parks it here keyed by customer code and links it into the
+-- restaurants row when the matching charge.success lands (Nov 3, 2026).
+CREATE TABLE IF NOT EXISTS pending_subscriptions (
+  customer_code text PRIMARY KEY,
+  subscription_code text,
+  email_token text,
+  next_payment_date timestamptz,
+  plan_code text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);

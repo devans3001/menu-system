@@ -1,9 +1,9 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MenuDocument, Special, SpecialRuleType } from "../../lib/types";
 import { formatPrice } from "../../lib/format";
 import { isScheduleActive } from "../../lib/specials";
-import { DayChips, EmptyState, Field, GhostButton, PrimaryButton, SectionTitle, inputCls, parsePrice, scheduleSummary, uid } from "./shared";
+import { DayChips, EmptyState, Field, GhostButton, PrimaryButton, SectionTitle, UndoToast, inputCls, parsePrice, scheduleSummary, uid } from "./shared";
 
 // Specials are scheduled price rules laid over the menu, never edited
 // copies of a dish. When the window ends, the dish returns to its normal
@@ -71,6 +71,10 @@ export default function SpecialsSection({ doc, onCommit }: { doc: MenuDocument; 
   const [formOpen, setFormOpen] = useState(false);
   const [draft, setDraft] = useState<SpecialDraft>(() => blankDraft(doc));
   const [errors, setErrors] = useState<string[]>([]);
+  const [undo, setUndo] = useState<{ snapshot: MenuDocument; label: string } | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
 
   const openNew = () => { setEditing(null); setDraft(blankDraft(doc)); setErrors([]); setFormOpen(true); };
   const openEdit = (s: Special) => { setEditing(s); setDraft(draftFromSpecial(doc, s)); setErrors([]); setFormOpen(true); };
@@ -113,8 +117,18 @@ export default function SpecialsSection({ doc, onCommit }: { doc: MenuDocument; 
   }
 
   function remove(s: Special) {
-    if (!window.confirm(`Delete the ${s.name} special? Dishes return to their normal prices.`)) return;
+    // No browser confirm box: the delete lands at once and Undo rides
+    // along for 10 seconds (interaction bench, Nov 3, 2026).
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setUndo({ snapshot: structuredClone(doc), label: `${s.name} deleted. Dishes are back to normal prices.` });
+    undoTimer.current = setTimeout(() => setUndo(null), 10000);
     onCommit({ ...structuredClone(doc), specials: doc.specials.filter(x => x.id !== s.id) });
+  }
+  function doUndo() {
+    if (!undo) return;
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    onCommit(undo.snapshot);
+    setUndo(null);
   }
 
   return (
@@ -197,7 +211,7 @@ export default function SpecialsSection({ doc, onCommit }: { doc: MenuDocument; 
                 <div className="flex gap-1.5 mt-2 flex-wrap" role="group" aria-label="Applies to">
                   {([["all", "Whole menu"], ["section", "One section"], ["items", "Chosen dishes"]] as const).map(([v, label]) => (
                     <button key={v} type="button" aria-pressed={draft.appliesTo === v} onClick={() => set({ appliesTo: v })}
-                      className="px-4 py-2.5 text-[13px] font-semibold border"
+                      className="px-4 py-2.5 min-h-11 text-[13px] font-semibold border"
                       style={draft.appliesTo === v ? { background: "var(--color-accent2)", color: "#0D0A07", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--color-ink) 20%, transparent)" }}>
                       {label}
                     </button>
@@ -217,7 +231,7 @@ export default function SpecialsSection({ doc, onCommit }: { doc: MenuDocument; 
                       return (
                         <button key={i.id} type="button" aria-pressed={on}
                           onClick={() => set({ itemIds: on ? draft.itemIds.filter(id => id !== i.id) : [...draft.itemIds, i.id] })}
-                          className="px-3 py-2 text-[13px] font-semibold border"
+                          className="px-3 py-2 min-h-11 inline-flex items-center text-[13px] font-semibold border"
                           style={on ? { background: "var(--color-ink)", color: "var(--color-bg)", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--color-ink) 20%, transparent)" }}>
                           {i.name}
                         </button>
@@ -228,7 +242,7 @@ export default function SpecialsSection({ doc, onCommit }: { doc: MenuDocument; 
               </div>
 
               <div className="grid sm:grid-cols-2 gap-5">
-                <Field label="Discount shape">
+                <Field label="Kind of offer">
                   <select value={draft.ruleType} onChange={e => set({ ruleType: e.target.value as SpecialDraft["ruleType"] })} className={inputCls} style={{ background: "var(--color-surface)" }}>
                     <option value="percent_off">Percent off</option>
                     <option value="amount_off">Amount off</option>
@@ -279,6 +293,8 @@ export default function SpecialsSection({ doc, onCommit }: { doc: MenuDocument; 
           </div>
         </div>
       )}
+
+      {undo && <UndoToast message={undo.label} onUndo={doUndo} />}
     </div>
   );
 }

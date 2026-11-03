@@ -51,8 +51,8 @@ export default function QrSection() {
           <p className="text-[15px] opacity-80 mt-1.5 leading-relaxed">Free to download and print, as many as you like. It points at your own domain: <span className="font-mono2 text-[13px]">{menuUrl}</span></p>
           {qrPng && /* eslint-disable-next-line @next/next/no-img-element */ <img src={qrPng} alt={"QR code for " + menuUrl} className="w-44 h-44 mt-4 bg-white p-2" />}
           <div className="flex gap-2.5 mt-5 flex-wrap">
-            {qrPng && <a href={qrPng} download="menu-qr.png" className="px-5 py-3 font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Download PNG</a>}
-            {qrSvg && <button type="button" onClick={downloadSvg} className="px-5 py-3 border hairline font-mono2 text-[13px] font-bold uppercase tracking-wider">Download SVG</button>}
+            {qrPng && <a href={qrPng} download="menu-qr.png" className="px-5 py-3 min-h-11 font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Download PNG, for print</a>}
+            {qrSvg && <button type="button" onClick={downloadSvg} className="px-5 py-3 min-h-11 border hairline font-mono2 text-[13px] font-bold uppercase tracking-wider">Download SVG, for a professional printer</button>}
           </div>
           <p className="text-[13px] opacity-60 mt-4 leading-relaxed">
             Table tent hint: print the PNG at business card size or larger, stand it on every table with the words

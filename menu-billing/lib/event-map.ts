@@ -7,25 +7,74 @@ import { slugFromPayload } from "./registry";
 // subscription.disable -> paused only after grace, or when Evans ordered it
 // subscription.create / invoice.create / subscription.not_renew -> log, no premature state flip
 // subscription.expiring_cards -> notify only
+//
+// Slug linking (fixed Nov 3, 2026, from the genuine payment proof):
+// Paystack's subscription.create carries no metadata slug, so it used
+// to log unmatched and the real customer/subscription codes and next
+// payment date never reached the registry (renewals and pauses act on
+// those codes, so this mattered). Now the slug resolves three ways:
+// the payload metadata when present; the customer code already stored
+// on a restaurant row; and a pending-subscription park keyed by
+// customer code, drained when the matching charge.success lands.
+// Webhook order is not guaranteed, and both orders are handled.
 export async function handlePaystackEvent(store: RegistryStore, eventType: string, payload: any): Promise<{ slug: string | null; action: string }> {
-  const slug = slugFromPayload(payload);
+  const customerCode: string | null = payload?.data?.customer?.customer_code ?? null;
+  let slug = slugFromPayload(payload);
+  if (!slug && customerCode) slug = await store.findSlugByCustomerCode(customerCode);
   const reference: string | null = payload?.data?.reference ?? null;
   await store.appendPaymentEvent({ slug, eventType, paystackReference: reference, payload, receivedAt: new Date().toISOString() });
+
+  if (eventType === "subscription.create" && !slug) {
+    // No way to name the menu yet: park the subscription by customer
+    // so its charge can claim it. Logged, never dropped.
+    if (customerCode) {
+      await store.savePendingSubscription({
+        customerCode,
+        subscriptionCode: payload?.data?.subscription_code ?? null,
+        emailToken: payload?.data?.email_token ?? null,
+        nextPaymentDate: payload?.data?.next_payment_date ?? null,
+        planCode: payload?.data?.plan?.plan_code ?? null,
+      });
+      return { slug: null, action: "logged_pending_subscription_link" };
+    }
+    return { slug: null, action: "logged_unmatched" };
+  }
   if (!slug) return { slug: null, action: "logged_unmatched" };
+
   const row = await store.getRestaurant(slug);
   const mode = row?.billingMode ?? payload?.data?.metadata?.billing_mode ?? "monthly";
   const now = new Date().toISOString();
   const base = { slug, lastEvent: eventType, lastEventAt: now };
   switch (eventType) {
     case "subscription.create": {
-      await store.upsertRestaurant({ ...base, paystackSubscriptionCode: payload?.data?.subscription_code ?? row?.paystackSubscriptionCode ?? null, paystackCustomerCode: payload?.data?.customer?.customer_code ?? row?.paystackCustomerCode ?? null, paystackEmailToken: payload?.data?.email_token ?? row?.paystackEmailToken ?? null });
+      await store.upsertRestaurant({
+        ...base,
+        paystackSubscriptionCode: payload?.data?.subscription_code ?? row?.paystackSubscriptionCode ?? null,
+        paystackCustomerCode: customerCode ?? row?.paystackCustomerCode ?? null,
+        paystackEmailToken: payload?.data?.email_token ?? row?.paystackEmailToken ?? null,
+        nextPaymentDate: payload?.data?.next_payment_date ?? row?.nextPaymentDate ?? null,
+      });
       return { slug, action: "subscription_stored_state_unchanged" };
     }
     case "charge.success": {
-      const next = payload?.data?.next_payment_date ?? null;
-      if (mode === "one_time") await store.upsertRestaurant({ ...base, state: "lifetime", nextPaymentDate: null, graceUntil: null, paystackAuthorizationCode: payload?.data?.authorization?.authorization_code ?? row?.paystackAuthorizationCode ?? null });
-      else await store.upsertRestaurant({ ...base, state: "live", graceUntil: null, nextPaymentDate: next, paystackAuthorizationCode: payload?.data?.authorization?.authorization_code ?? row?.paystackAuthorizationCode ?? null });
-      return { slug, action: mode === "one_time" ? "state_lifetime" : "state_live" };
+      if (mode === "one_time") {
+        await store.upsertRestaurant({ ...base, state: "lifetime", nextPaymentDate: null, graceUntil: null, paystackCustomerCode: customerCode ?? row?.paystackCustomerCode ?? null, paystackAuthorizationCode: payload?.data?.authorization?.authorization_code ?? row?.paystackAuthorizationCode ?? null });
+        return { slug, action: "state_lifetime" };
+      }
+      // Monthly: claim any parked subscription for this customer so
+      // the row carries the REAL subscription code, email token and
+      // next payment date, not leftovers from any earlier test.
+      const pending = customerCode ? await store.getPendingSubscription(customerCode) : null;
+      const next = payload?.data?.next_payment_date ?? pending?.nextPaymentDate ?? row?.nextPaymentDate ?? null;
+      await store.upsertRestaurant({
+        ...base, state: "live", graceUntil: null, nextPaymentDate: next,
+        paystackCustomerCode: customerCode ?? row?.paystackCustomerCode ?? null,
+        paystackSubscriptionCode: pending?.subscriptionCode ?? row?.paystackSubscriptionCode ?? null,
+        paystackEmailToken: pending?.emailToken ?? row?.paystackEmailToken ?? null,
+        paystackAuthorizationCode: payload?.data?.authorization?.authorization_code ?? row?.paystackAuthorizationCode ?? null,
+      });
+      if (pending && customerCode) await store.clearPendingSubscription(customerCode);
+      return { slug, action: pending ? "state_live_subscription_linked" : "state_live" };
     }
     case "invoice.create": return { slug, action: "logged_early_warning" };
     case "invoice.payment_failed": {
