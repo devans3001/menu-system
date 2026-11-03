@@ -27,6 +27,30 @@ CREATE TABLE IF NOT EXISTS restaurants (
 
 -- For databases created from an earlier version of this schema.
 ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS manual_pause_ordered boolean NOT NULL DEFAULT false;
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS owner_email text;
+
+-- Owner alerts (Nov 3, 2026): every alert the billing service sends
+-- or records lives here. The (slug, kind, cycle_key) triple dedupes
+-- per billing cycle: a webhook retry or a repeat daily scan never
+-- sends the same alert twice, while a new cycle alerts again.
+-- Statuses: sent, recorded (no email provider configured yet),
+-- failed, no_recipient. The billing service also self-creates this
+-- table on first use, so a deploy never waits on a schema re-run.
+CREATE TABLE IF NOT EXISTS notifications (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  slug text REFERENCES restaurants(slug) ON DELETE SET NULL,
+  kind text NOT NULL,
+  cycle_key text NOT NULL,
+  channel text NOT NULL DEFAULT 'email',
+  recipient text,
+  subject text NOT NULL,
+  body text NOT NULL DEFAULT '',
+  status text NOT NULL,
+  provider_id text,
+  detail text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (slug, kind, cycle_key)
+);
 
 CREATE TABLE IF NOT EXISTS menus (
   slug text PRIMARY KEY REFERENCES restaurants(slug) ON DELETE CASCADE

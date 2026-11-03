@@ -12,7 +12,23 @@ export interface RestaurantRow {
   paystackEmailToken: string | null; paystackAuthorizationCode: string | null;
   nextPaymentDate: string | null; graceUntil: string | null;
   lastEvent: string | null; lastEventAt: string | null;
+  ownerEmail: string | null; // captured from Paystack customer payloads; owner alerts go here
   manualPauseOrdered?: boolean; // Evans orders a pause; honoured on subscription.disable
+}
+// One owner alert (Nov 3, 2026). The (slug, kind, cycleKey) triple is
+// the dedupe key: a webhook retry or a repeat scan can never send the
+// same alert for the same billing cycle twice, while a new cycle
+// (new grace deadline, new renewal date) alerts again.
+export interface NotificationRecord {
+  slug: string; kind: string; cycleKey: string;
+  recipient: string | null; subject: string; body: string;
+  status: "sent" | "recorded" | "failed" | "no_recipient";
+  providerId: string | null; detail: string;
+}
+export interface AlertCandidate {
+  slug: string; state: string; billingMode: "monthly" | "one_time";
+  nextPaymentDate: string | null; graceUntil: string | null;
+  ownerEmail: string | null; paystackSubscriptionCode: string | null;
 }
 // A subscription that arrived before its menu could be identified.
 // Paystack's subscription.create carries NO metadata slug (proven by
@@ -38,6 +54,9 @@ export interface RegistryStore {
   getPendingSubscription(customerCode: string): Promise<PendingSubscription | null>;
   clearPendingSubscription(customerCode: string): Promise<void>;
   findSlugByCustomerCode(customerCode: string): Promise<string | null>;
+  recordNotification(rec: NotificationRecord): Promise<boolean>; // false when the cycle already has this alert
+  hasNotification(slug: string, kind: string, cycleKey: string): Promise<boolean>;
+  listAlertCandidates(): Promise<AlertCandidate[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,11 +65,13 @@ export interface RegistryStore {
 const events: PaymentEventRecord[] = [];
 const rows = new Map<string, RestaurantRow>();
 const pendingSubs = new Map<string, PendingSubscription>();
+const notificationKeys = new Set<string>();
+export const notificationsLog: NotificationRecord[] = [];
 export const inMemoryRegistry: RegistryStore = {
   async appendPaymentEvent(rec) { events.push(rec); console.log("[payment_events append]", rec.eventType, rec.slug); },
   async getRestaurant(slug) { return rows.get(slug) ?? null; },
   async upsertRestaurant(patch) {
-    const prev = rows.get(patch.slug) ?? { slug: patch.slug, state: "awaiting_payment", billingMode: "monthly" as const, paystackCustomerCode: null, paystackSubscriptionCode: null, paystackEmailToken: null, paystackAuthorizationCode: null, nextPaymentDate: null, graceUntil: null, lastEvent: null, lastEventAt: null };
+    const prev = rows.get(patch.slug) ?? { slug: patch.slug, state: "awaiting_payment", billingMode: "monthly" as const, paystackCustomerCode: null, paystackSubscriptionCode: null, paystackEmailToken: null, paystackAuthorizationCode: null, nextPaymentDate: null, graceUntil: null, lastEvent: null, lastEventAt: null, ownerEmail: null };
     rows.set(patch.slug, { ...prev, ...patch } as RestaurantRow);
   },
   async savePendingSubscription(rec) { pendingSubs.set(rec.customerCode, rec); },
@@ -59,6 +80,20 @@ export const inMemoryRegistry: RegistryStore = {
   async findSlugByCustomerCode(customerCode) {
     for (const r of rows.values()) if (r.paystackCustomerCode === customerCode) return r.slug;
     return null;
+  },
+  async recordNotification(rec) {
+    const key = `${rec.slug}|${rec.kind}|${rec.cycleKey}`;
+    if (notificationKeys.has(key)) return false;
+    notificationKeys.add(key);
+    notificationsLog.push(rec);
+    console.log("[notification]", rec.kind, rec.slug, rec.status);
+    return true;
+  },
+  async hasNotification(slug, kind, cycleKey) { return notificationKeys.has(`${slug}|${kind}|${cycleKey}`); },
+  async listAlertCandidates() {
+    return [...rows.values()]
+      .filter(r => r.billingMode === "monthly" && (r.state === "live" || r.state === "grace"))
+      .map(r => ({ slug: r.slug, state: r.state, billingMode: r.billingMode, nextPaymentDate: r.nextPaymentDate, graceUntil: r.graceUntil, ownerEmail: r.ownerEmail, paystackSubscriptionCode: r.paystackSubscriptionCode }));
   },
 };
 
@@ -86,6 +121,7 @@ const COLUMN_MAP: Partial<Record<keyof RestaurantRow, string>> = {
   graceUntil: "grace_until",
   lastEvent: "last_event",
   lastEventAt: "last_event_at",
+  ownerEmail: "owner_email",
   manualPauseOrdered: "manual_pause_ordered",
 };
 
@@ -175,10 +211,11 @@ class NeonRegistryStore implements RegistryStore {
   }
 
   async getRestaurant(slug: string): Promise<RestaurantRow | null> {
+    await this.ensureAlerts();
     const found = await this.sql.query(
       `SELECT slug, state, billing_mode, paystack_customer_code, paystack_subscription_code,
               paystack_email_token, paystack_authorization_code, next_payment_date,
-              grace_until, last_event, last_event_at, manual_pause_ordered
+              grace_until, last_event, last_event_at, manual_pause_ordered, owner_email
        FROM restaurants WHERE slug = $1`,
       [slug],
     );
@@ -196,8 +233,80 @@ class NeonRegistryStore implements RegistryStore {
       graceUntil: toIso(r.grace_until),
       lastEvent: (r.last_event as string | null) ?? null,
       lastEventAt: toIso(r.last_event_at),
+      ownerEmail: (r.owner_email as string | null) ?? null,
       manualPauseOrdered: r.manual_pause_ordered === true,
     };
+  }
+
+  // Owner alerts schema (Nov 3, 2026), self-applied like
+  // pending_subscriptions so a billing deploy never fails on a
+  // database whose schema.sql has not been re-run yet. The same DDL
+  // also lives in menu-template/schema.sql for fresh setups.
+  private alertsReady: Promise<void> | null = null;
+  private ensureAlerts(): Promise<void> {
+    if (!this.alertsReady) {
+      this.alertsReady = (async () => {
+        await this.sql.query("ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS owner_email text", []);
+        await this.sql.query(
+          `CREATE TABLE IF NOT EXISTS notifications (
+             id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+             slug text REFERENCES restaurants(slug) ON DELETE SET NULL,
+             kind text NOT NULL,
+             cycle_key text NOT NULL,
+             channel text NOT NULL DEFAULT 'email',
+             recipient text,
+             subject text NOT NULL,
+             body text NOT NULL DEFAULT '',
+             status text NOT NULL,
+             provider_id text,
+             detail text,
+             created_at timestamptz NOT NULL DEFAULT now(),
+             UNIQUE (slug, kind, cycle_key)
+           )`,
+          [],
+        );
+      })();
+    }
+    return this.alertsReady;
+  }
+
+  async recordNotification(rec: NotificationRecord): Promise<boolean> {
+    await this.ensureAlerts();
+    const out = await this.sql.query(
+      `INSERT INTO notifications (slug, kind, cycle_key, recipient, subject, body, status, provider_id, detail)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (slug, kind, cycle_key) DO NOTHING
+       RETURNING id`,
+      [rec.slug, rec.kind, rec.cycleKey, rec.recipient, rec.subject, rec.body, rec.status, rec.providerId, rec.detail],
+    );
+    return out.length > 0;
+  }
+
+  async hasNotification(slug: string, kind: string, cycleKey: string): Promise<boolean> {
+    await this.ensureAlerts();
+    const found = await this.sql.query(
+      "SELECT 1 FROM notifications WHERE slug = $1 AND kind = $2 AND cycle_key = $3 LIMIT 1",
+      [slug, kind, cycleKey],
+    );
+    return found.length > 0;
+  }
+
+  async listAlertCandidates(): Promise<AlertCandidate[]> {
+    await this.ensureAlerts();
+    const found = await this.sql.query(
+      `SELECT slug, state, billing_mode, next_payment_date, grace_until, owner_email, paystack_subscription_code
+       FROM restaurants WHERE billing_mode = 'monthly' AND state IN ('live', 'grace')`,
+      [],
+    );
+    return (found as Record<string, unknown>[]).map(r => ({
+      slug: String(r.slug),
+      state: String(r.state),
+      billingMode: (r.billing_mode === "one_time" ? "one_time" : "monthly") as "monthly" | "one_time",
+      nextPaymentDate: toIso(r.next_payment_date),
+      graceUntil: toIso(r.grace_until),
+      ownerEmail: (r.owner_email as string | null) ?? null,
+      paystackSubscriptionCode: (r.paystack_subscription_code as string | null) ?? null,
+    }));
   }
 
   async upsertRestaurant(patch: Partial<RestaurantRow> & { slug: string }): Promise<void> {
