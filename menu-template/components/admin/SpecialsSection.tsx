@@ -25,6 +25,28 @@ interface SpecialDraft {
   endsAt: string;
 }
 
+// The old off-duty chip only said "Not in its window", which reads
+// as broken when an owner checks at night and then cannot find the
+// special on the guest page (Evans, Nov 3, 2026). Say when it runs
+// next instead: scan forward in 15-minute steps with the same
+// schedule check the guest side uses, over the coming week.
+function nextRunLabel(s: Special): string {
+  const now = new Date();
+  if (s.schedule.endsAt && new Date(s.schedule.endsAt) < now) return "Ended";
+  for (let step = 1; step <= 8 * 24 * 4; step++) {
+    const t = new Date(now.getTime() + step * 15 * 60 * 1000);
+    if (isScheduleActive(s.schedule, t)) {
+      const day = new Intl.DateTimeFormat("en-GB", { weekday: "short" }).format(t);
+      const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(t);
+      const daysAhead = Math.floor((new Date(t).setHours(0, 0, 0, 0) - new Date(now).setHours(0, 0, 0, 0)) / 86400000);
+      if (daysAhead === 0) return `Starts today ${time}`;
+      if (daysAhead === 1) return `Starts tomorrow ${time}`;
+      return `Starts ${day} ${time}`;
+    }
+  }
+  return "Not scheduled this week";
+}
+
 function draftFromSpecial(doc: MenuDocument, s: Special): SpecialDraft {
   const appliesTo = s.targetItemIds.length ? "items" : s.targetSectionIds.length >= Math.max(1, doc.sections.length) && doc.sections.every(sec => s.targetSectionIds.includes(sec.id)) ? "all" : "section";
   return {
@@ -164,7 +186,7 @@ export default function SpecialsSection({ doc, onCommit }: { doc: MenuDocument; 
                   </div>
                   {live
                     ? <span className="font-mono2 text-[13px] font-bold uppercase tracking-wider px-2.5 py-1" style={{ background: "var(--color-accent2)", color: "#0D0A07" }}>Live now</span>
-                    : <span className="font-mono2 text-[13px] font-bold uppercase tracking-wider px-2.5 py-1 border hairline opacity-70">Not in its window</span>}
+                    : <span className="font-mono2 text-[13px] font-bold uppercase tracking-wider px-2.5 py-1 border hairline opacity-70">{nextRunLabel(s)}</span>}
                 </div>
                 <div className="flex gap-x-6 gap-y-1.5 mt-4 flex-wrap text-[15px]">
                   <span><span className="opacity-60 text-[13px] font-semibold uppercase tracking-wide">Rule&nbsp;&nbsp;</span><span className="font-mono2 text-[13px] font-bold" style={{ color: "var(--color-accent2)" }}>{ruleSummary(doc, s)}</span></span>

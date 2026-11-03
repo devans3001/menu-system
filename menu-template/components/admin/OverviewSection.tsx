@@ -67,7 +67,11 @@ export default function OverviewSection({ doc, go, flags, onViewLive, onReplayTo
     <div>
       <SectionTitle eyebrow="At a glance" title="Overview" />
       <p className="mt-3 text-[15px] opacity-80 leading-relaxed max-w-xl">
-        Right now guests are seeing the <strong>{currentMenu.name}</strong> menu ({scheduleSummary(currentMenu.schedule.days, currentMenu.schedule.windows)}).
+        {currentMenu ? (
+          <>Right now guests are seeing the <strong>{currentMenu.name}</strong> menu ({scheduleSummary(currentMenu.schedule.days, currentMenu.schedule.windows)}).</>
+        ) : (
+          <>No menu yet, so guests are seeing a placeholder page for now. Add a menu and its first dishes and this page becomes your daily control room.</>
+        )}
         {soldOut.length > 0 && <> {soldOut.map(i => i.name).join(", ")} {soldOut.length === 1 ? "is" : "are"} marked sold out.</>}
         {liveSpecials.length > 0 && <> Running now: {liveSpecials.map(s => s.name).join(", ")}.</>}
       </p>

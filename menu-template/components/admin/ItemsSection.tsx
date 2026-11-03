@@ -128,58 +128,67 @@ export default function ItemsSection({ doc, onCommit, startNewItem, onConsumeSta
                   const sold = isSoldOut(doc, item.id);
                   const editingPrice = priceEdit?.itemId === item.id;
                   return (
-                    <div key={item.id} className="flex gap-3.5 py-3.5 border-b hairline items-center" data-item-row={item.id}>
-                      <button type="button" onClick={() => openEdit(item)} className="flex gap-3.5 items-center min-w-0 flex-1 text-left">
-                        {item.photoUrl ? (
-                          /* eslint-disable-next-line @next/next/no-img-element */
-                          <img src={item.photoUrl} alt="" className={"w-14 h-14 object-cover shrink-0 photo-grade " + (sold ? "grayscale opacity-60" : "")} />
-                        ) : (
-                          <span className="w-14 h-14 shrink-0 border hairline flex items-center justify-center font-display text-xl" style={{ background: "var(--color-surface)" }}>{item.name.charAt(0)}</span>
-                        )}
-                        <span className="min-w-0">
-                          <span className="block font-bold leading-tight text-[15px]">{item.name}{!item.active && <span className="opacity-50 font-semibold"> (off menu)</span>}</span>
-                          <span className="flex gap-2 mt-1.5 flex-wrap items-center">
-                            {sold && <span className="font-mono2 text-[13px] font-bold uppercase tracking-wider px-2 py-0.5" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Sold out</span>}
-                            {item.variantIds.length > 0 && <span className="text-[13px] opacity-60">{item.variantIds.length} sizes or choices</span>}
-                            {item.modifierGroupIds.length > 0 && <span className="text-[13px] opacity-60">{item.modifierGroupIds.length} sets of choices</span>}
-                            {item.badges[0] && <span className="text-[13px]" style={{ color: "var(--color-accent2)" }}>{item.badges[0].label}</span>}
-                          </span>
-                        </span>
-                      </button>
-                      <span className="shrink-0 text-right">
-                        {editingPrice ? (
-                          <span className="block">
-                            <span className="flex gap-1.5 items-center">
-                              <input
-                                autoFocus
-                                inputMode="numeric"
-                                value={priceEdit.value}
-                                onChange={e => setPriceEdit({ itemId: item.id, value: e.target.value })}
-                                onKeyDown={e => {
-                                  if (e.key === "Enter") commitPrice(item);
-                                  if (e.key === "Escape") { setPriceEdit(null); setPriceError(""); }
-                                }}
-                                className={inputCls + " font-mono2"}
-                                style={{ width: 120 }}
-                                aria-label={`New price for ${item.name}`}
-                                data-testid="quick-price"
-                              />
-                              <button type="button" onClick={() => commitPrice(item)} className="px-3 py-2.5 min-h-11 font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Save</button>
-                              <button type="button" onClick={() => { setPriceEdit(null); setPriceError(""); }} className="px-2.5 py-2.5 min-h-11 border hairline font-mono2 text-[13px] font-bold uppercase">Cancel</button>
+                    <div key={item.id} className="py-3.5 border-b hairline" data-item-row={item.id}>
+                      <div className="flex gap-3.5 items-center">
+                        <button type="button" onClick={() => openEdit(item)} className="flex gap-3.5 items-center min-w-0 flex-1 text-left">
+                          {item.photoUrl ? (
+                            /* eslint-disable-next-line @next/next/no-img-element */
+                            <img src={item.photoUrl} alt="" className={"w-14 h-14 object-cover shrink-0 photo-grade " + (sold ? "grayscale opacity-60" : "")} />
+                          ) : (
+                            <span className="w-14 h-14 shrink-0 border hairline flex items-center justify-center font-display text-xl" style={{ background: "var(--color-surface)" }}>{item.name.charAt(0)}</span>
+                          )}
+                          <span className="min-w-0">
+                            <span className="block font-bold leading-tight text-[15px]">{item.name}{!item.active && <span className="opacity-50 font-semibold"> (off menu)</span>}</span>
+                            <span className="flex gap-2 mt-1.5 flex-wrap items-center">
+                              {sold && <span className="font-mono2 text-[13px] font-bold uppercase tracking-wider px-2 py-0.5" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Sold out</span>}
+                              {item.variantIds.length > 0 && <span className="text-[13px] opacity-60">{item.variantIds.length} sizes or choices</span>}
+                              {item.modifierGroupIds.length > 0 && <span className="text-[13px] opacity-60">{item.modifierGroupIds.length} sets of choices</span>}
+                              {item.badges[0] && <span className="text-[13px]" style={{ color: "var(--color-accent2)" }}>{item.badges[0].label}</span>}
                             </span>
-                            {priceError
-                              ? <span className="block text-[13px] mt-1.5" style={{ color: "var(--color-accent)" }} role="alert">{priceError}</span>
-                              : <span className="block text-[13px] opacity-60 mt-1.5">Enter saves. It is {formatPrice(item.priceType === "market" ? item.todaysMarketPrice : item.basePrice, doc.venue.currency)} now.</span>}
                           </span>
-                        ) : (
-                          <button type="button" onClick={() => startPriceEdit(item)} className="block text-right py-1" title={priceEditable(item) ? "Tap to change this price" : "Open the dish to change its prices"} data-testid="price-button">
-                            <span className="block font-mono2 text-[13px]">{displayPriceForItem(item, doc.venue.currency) || "Set by choices"}</span>
-                            <span className="block font-mono2 text-[13px] font-bold uppercase tracking-wider mt-1" style={{ color: "var(--color-accent)" }}>
-                              {priceEditable(item) ? "Change price" : "Edit dish"}
-                            </span>
-                          </button>
+                        </button>
+                        {!editingPrice && (
+                          <span className="shrink-0 text-right">
+                            <button type="button" onClick={() => startPriceEdit(item)} className="block text-right py-1" title={priceEditable(item) ? "Tap to change this price" : "Open the dish to change its prices"} data-testid="price-button">
+                              <span className="block font-mono2 text-[13px]">{displayPriceForItem(item, doc.venue.currency) || "Set by choices"}</span>
+                              <span className="block font-mono2 text-[13px] font-bold uppercase tracking-wider mt-1" style={{ color: "var(--color-accent)" }}>
+                                {priceEditable(item) ? "Change price" : "Edit dish"}
+                              </span>
+                            </button>
+                          </span>
                         )}
-                      </span>
+                      </div>
+                      {editingPrice && (
+                        // Decluttered (Nov 3, 2026, Evans: the editor was
+                        // "clustered"). The old shape squeezed a fixed
+                        // 120px input, Save and Cancel into the narrow
+                        // right column beside the photo and name, where
+                        // a phone has no room for them. The editor now
+                        // takes its own full-width line under the dish:
+                        // one roomy input, then Save and Cancel.
+                        <div className="mt-3">
+                          <div className="flex gap-2 items-center">
+                            <input
+                              autoFocus
+                              inputMode="numeric"
+                              value={priceEdit.value}
+                              onChange={e => setPriceEdit({ itemId: item.id, value: e.target.value })}
+                              onKeyDown={e => {
+                                if (e.key === "Enter") commitPrice(item);
+                                if (e.key === "Escape") { setPriceEdit(null); setPriceError(""); }
+                              }}
+                              className={inputCls + " font-mono2 flex-1 min-w-0"}
+                              aria-label={`New price for ${item.name}`}
+                              data-testid="quick-price"
+                            />
+                            <button type="button" onClick={() => commitPrice(item)} className="px-4 py-2.5 min-h-11 shrink-0 font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>Save</button>
+                            <button type="button" onClick={() => { setPriceEdit(null); setPriceError(""); }} className="px-3 py-2.5 min-h-11 shrink-0 border hairline font-mono2 text-[13px] font-bold uppercase">Cancel</button>
+                          </div>
+                          {priceError
+                            ? <p className="text-[13px] mt-2" style={{ color: "var(--color-accent)" }} role="alert">{priceError}</p>
+                            : <p className="text-[13px] opacity-60 mt-2">Enter saves. It is {formatPrice(item.priceType === "market" ? item.todaysMarketPrice : item.basePrice, doc.venue.currency)} now.</p>}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

@@ -44,7 +44,7 @@ export default function MenuShell({ doc }: { doc: MenuDocument }) {
   const currency = doc.venue.currency;
   const menu = useMemo(() => activeMenu(doc), [doc]);
   const specialsNow = useMemo(() => activeSpecials(doc), [doc]);
-  const sections = useMemo(() => menu.sectionIds.map(id => doc.sections.find(s => s.id === id)).filter(Boolean) as typeof doc.sections, [doc, menu]);
+  const sections = useMemo(() => (menu ? menu.sectionIds.map(id => doc.sections.find(s => s.id === id)).filter(Boolean) as typeof doc.sections : []), [doc, menu]);
   const pages = useMemo(() => {
     const out: PageEntry[] = [];
     for (const sec of sections) for (const iid of sec.itemIds) {
@@ -160,6 +160,28 @@ export default function MenuShell({ doc }: { doc: MenuDocument }) {
     if (idx === safePage) return;
     startTurn(idx, Math.abs(idx - safePage) === 1 ? "turn" : "riffle");
   };
+
+  // Empty menu (Nov 3, 2026): a venue with no menus yet, or menus
+  // carrying no dishes, used to crash this page, which assumes a menu
+  // always exists. Evans hit the risk clearing the demo data to test
+  // from zero, and a real brand mid-onboarding would hit it too.
+  // Guests get a calm placeholder instead of an error.
+  if (!menu || pages.length === 0) {
+    return (
+      <main className="min-h-screen flex flex-col">
+        <header className="px-5 pt-5 pb-3">
+          <h1 className="font-display uppercase leading-none text-[22px]">{restaurantConfig.displayName}</h1>
+        </header>
+        <div className="flex-1 flex items-center px-5 pb-16">
+          <div className="max-w-xl">
+            <p className="font-mono2 text-[13px] uppercase tracking-[0.22em]" style={{ color: "var(--color-accent)" }}>Menu</p>
+            <h2 className="font-display uppercase text-4xl leading-[0.95] mt-3">The kitchen is still writing this menu.</h2>
+            <p className="text-[15px] leading-relaxed opacity-80 mt-4">Nothing has been added yet. Please check back soon, or ask the team what is cooking today.</p>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen">
