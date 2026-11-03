@@ -85,8 +85,38 @@ function billingChip(state: string): { text: string; live: boolean } {
 function FirstRunTour({ step, onStep, onClose }: { step: number; onStep: (n: number) => void; onClose: () => void }) {
   const s = TOUR_STEPS[step];
   const last = step === TOUR_STEPS.length - 1;
+  // Evans (Nov 3, 2026, after using the editor himself): the card must
+  // not sit solid over the bottom of the page while the owner scrolls.
+  // While any scroll is moving it fades to a ghost and blurs slightly,
+  // so the page reads through it; when scrolling rests it comes back
+  // solid for reading and tapping. A tour that blocks the page fails
+  // the first-run rule in the fullstack skill.
+  const [dimmed, setDimmed] = useState(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onScroll = () => {
+      setDimmed(true);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setDimmed(false), 180);
+    };
+    window.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll, { capture: true });
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[70] p-4 pb-6" role="dialog" aria-label="Welcome tour">
+    <div
+      className="fixed inset-x-0 bottom-0 z-[70] p-4 pb-6"
+      role="dialog"
+      aria-label="Welcome tour"
+      style={{
+        opacity: dimmed ? 0.18 : 1,
+        filter: dimmed ? "blur(2px)" : "blur(0px)",
+        transition: "opacity 300ms ease, filter 300ms ease",
+        pointerEvents: dimmed ? "none" : "auto",
+      }}
+    >
       <div className="max-w-xl mx-auto border hairline p-5" style={{ background: "var(--color-surface)" }}>
         <div className="flex items-baseline justify-between gap-3">
           <p className="font-mono2 text-[13px] uppercase tracking-[0.22em]" style={{ color: "var(--color-accent)" }}>

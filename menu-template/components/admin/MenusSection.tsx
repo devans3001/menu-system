@@ -1,15 +1,24 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { MenuDocument, MenuEntity } from "../../lib/types";
+import { activeMenu } from "../../lib/specials";
 import { DayChips, EmptyState, Field, PrimaryButton, SectionTitle, UndoToast, inputCls, scheduleSummary, uid } from "./shared";
 
-// Menus: the venue can run several (lunch, dinner, late night). Each has
-// its own days and hours; when schedules overlap the guest side shows the
-// highest precedence menu. Every change here autosaves like the rest of
-// the editor (the one save model, Nov 3, 2026). Removing a menu offers
-// Undo for 10 seconds instead of a browser confirm box, and the Add
-// button never sits dead: it always answers, with the reason when the
-// name is missing.
+// Menus, simplified (Nov 3, 2026, Evans's verdict after using the old
+// page himself: it confused him, and he builds this thing, so it would
+// bury owners). The old shape led with the machinery: days, windows,
+// precedence, sections as tick boxes. This shape leads with the one
+// answer owners come for: which menu guests are seeing right now,
+// computed with the same activeMenu the guest side uses, so the two
+// can never disagree. Days and hours still exist, folded behind one
+// "Days and hours" tap per menu, because most places run one menu all
+// day and should never have to look at scheduling controls. Extra
+// menus are framed as the optional extra they are. Unticking a
+// section that still carries dishes now says so, with the dish count,
+// instead of quietly hiding food. Every change autosaves like the
+// rest of the editor (the one save model, Nov 3, 2026). Removing a
+// menu offers Undo for 10 seconds, and the Add button never sits
+// dead: it always answers, with the reason when the name is missing.
 export default function MenusSection({ doc, onChange, onCommit }: {
   doc: MenuDocument;
   onChange: (next: MenuDocument) => void;
@@ -19,8 +28,26 @@ export default function MenusSection({ doc, onChange, onCommit }: {
   const [addError, setAddError] = useState("");
   const [undo, setUndo] = useState<{ snapshot: MenuDocument; label: string } | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [openSchedules, setOpenSchedules] = useState<ReadonlySet<string>>(new Set());
+  // The live-now line must stay honest while the page sits open, so
+  // it re-evaluates every minute rather than only on edits.
+  const [, setMinuteTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setMinuteTick(n => n + 1), 60000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
+
+  const liveMenu = doc.menus.length ? activeMenu(doc) : undefined;
+
+  function toggleSchedule(id: string) {
+    setOpenSchedules(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   function patchMenu(id: string, patch: Partial<MenuEntity>) {
     onChange({ ...doc, menus: doc.menus.map(m => (m.id === id ? { ...m, ...patch } : m)) });
@@ -43,6 +70,10 @@ export default function MenusSection({ doc, onChange, onCommit }: {
       sectionIds: [],
     };
     setNewName("");
+    // The new card appears in the list above this form: open its days
+    // and hours straight away so the owner lands on the next job
+    // instead of hunting for where the menu went.
+    setOpenSchedules(prev => new Set(prev).add(menu.id));
     onCommit({ ...doc, menus: [...doc.menus, menu] });
   }
   function removeMenu(menu: MenuEntity) {
@@ -60,11 +91,16 @@ export default function MenusSection({ doc, onChange, onCommit }: {
 
   return (
     <div>
-      <SectionTitle eyebrow="When each menu runs" title="Menus" />
+      <SectionTitle eyebrow="Your menus" title="Menus" />
       <p className="mt-3 text-[15px] opacity-80 leading-relaxed max-w-xl">
-        Guests always see one menu at a time: the one whose day and hours match the moment. Tick the sections each menu should carry.
-        Every change here saves itself as you make it.
+        Most places run one menu all day. Add another only when the food or the prices change by time of day, like a brunch
+        or a late night menu. Every change here saves itself as you make it.
       </p>
+      {liveMenu && (
+        <p className="mt-4 inline-block px-3.5 py-2.5 border hairline text-[14px]" style={{ background: "var(--color-surface)" }} role="status">
+          Guests are seeing <strong>{liveMenu.name}</strong> right now. {scheduleSummary(liveMenu.schedule.days, liveMenu.schedule.windows)}.
+        </p>
+      )}
 
       <div className="mt-7 grid gap-6">
         {doc.menus.map(menu => (
@@ -76,39 +112,60 @@ export default function MenusSection({ doc, onChange, onCommit }: {
                     <input value={menu.name} onChange={e => patchMenu(menu.id, { name: e.target.value })} className={inputCls} aria-label="Menu name" />
                   </Field>
                 </div>
-                {doc.menus.length > 1 && (
-                  <button type="button" onClick={() => removeMenu(menu)} className="mt-6 px-4 py-2.5 border hairline font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ color: "var(--color-accent)" }}>
-                    Remove menu
-                  </button>
-                )}
-              </div>
-              <p className="font-mono2 text-[13px] mt-3" style={{ color: "var(--color-accent2)" }}>{scheduleSummary(menu.schedule.days, menu.schedule.windows)}</p>
-
-              <div className="mt-5">
-                <span className="text-[13px] font-semibold uppercase tracking-wide opacity-90">Days it runs</span>
-                <div className="mt-2">
-                  <DayChips days={menu.schedule.days} onChange={days => patchMenu(menu.id, { schedule: { ...menu.schedule, days } })} />
+                <div className="flex items-center gap-2.5 mt-6">
+                  {liveMenu?.id === menu.id && (
+                    <span className="px-2.5 py-1.5 font-mono2 text-[12px] font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>
+                      Live now
+                    </span>
+                  )}
+                  {doc.menus.length > 1 && (
+                    <button type="button" onClick={() => removeMenu(menu)} className="px-4 py-2.5 border hairline font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ color: "var(--color-accent)" }}>
+                      Remove menu
+                    </button>
+                  )}
                 </div>
               </div>
 
-              <div className="mt-5">
-                <span className="text-[13px] font-semibold uppercase tracking-wide opacity-90">Hours</span>
-                <div className="grid gap-2 mt-2">
-                  {menu.schedule.windows.map((w, i) => (
-                    <div key={i} className="flex items-center gap-2 flex-wrap">
-                      <input type="time" value={w.start} onChange={e => patchWindow(menu, i, { start: e.target.value })} className={inputCls + " font-mono2"} style={{ width: 140 }} aria-label="Opens" />
-                      <span className="opacity-60 text-[13px] font-semibold uppercase">to</span>
-                      <input type="time" value={w.end} onChange={e => patchWindow(menu, i, { end: e.target.value })} className={inputCls + " font-mono2"} style={{ width: 140 }} aria-label="Closes" />
-                      {menu.schedule.windows.length > 1 && (
-                        <button type="button" onClick={() => patchMenu(menu.id, { schedule: { ...menu.schedule, windows: menu.schedule.windows.filter((_, j) => j !== i) } })} className="px-3 py-2 border hairline font-mono2 text-[13px] font-bold uppercase">Remove</button>
-                      )}
+              <div className="mt-5 border-t hairline pt-4">
+                <button type="button" onClick={() => toggleSchedule(menu.id)} aria-expanded={openSchedules.has(menu.id)} className="w-full flex items-baseline justify-between gap-3 text-left min-h-11">
+                  <span>
+                    <span className="block text-[13px] font-semibold uppercase tracking-wide opacity-90">Days and hours</span>
+                    <span className="block font-mono2 text-[13px] mt-1" style={{ color: "var(--color-accent2)" }}>{scheduleSummary(menu.schedule.days, menu.schedule.windows)}</span>
+                  </span>
+                  <span className="font-mono2 text-[13px] font-bold uppercase tracking-wider shrink-0" style={{ color: "var(--color-accent)" }}>
+                    {openSchedules.has(menu.id) ? "Close" : "Change"}
+                  </span>
+                </button>
+                {openSchedules.has(menu.id) && (
+                  <div>
+                    <div className="mt-4">
+                      <span className="text-[13px] font-semibold uppercase tracking-wide opacity-90">Days it runs</span>
+                      <div className="mt-2">
+                        <DayChips days={menu.schedule.days} onChange={days => patchMenu(menu.id, { schedule: { ...menu.schedule, days } })} />
+                      </div>
                     </div>
-                  ))}
-                  <button type="button" onClick={() => patchMenu(menu.id, { schedule: { ...menu.schedule, windows: [...menu.schedule.windows, { start: "12:00", end: "14:00" }] } })} className="justify-self-start px-3 py-2 border hairline font-mono2 text-[13px] font-bold uppercase tracking-wider">
-                    Add hours
-                  </button>
-                </div>
-                <p className="text-[13px] opacity-60 mt-2">A close time earlier than the open time runs past midnight.</p>
+
+                    <div className="mt-5">
+                      <span className="text-[13px] font-semibold uppercase tracking-wide opacity-90">Hours</span>
+                      <div className="grid gap-2 mt-2">
+                        {menu.schedule.windows.map((w, i) => (
+                          <div key={i} className="flex items-center gap-2 flex-wrap">
+                            <input type="time" value={w.start} onChange={e => patchWindow(menu, i, { start: e.target.value })} className={inputCls + " font-mono2"} style={{ width: 140 }} aria-label="Opens" />
+                            <span className="opacity-60 text-[13px] font-semibold uppercase">to</span>
+                            <input type="time" value={w.end} onChange={e => patchWindow(menu, i, { end: e.target.value })} className={inputCls + " font-mono2"} style={{ width: 140 }} aria-label="Closes" />
+                            {menu.schedule.windows.length > 1 && (
+                              <button type="button" onClick={() => patchMenu(menu.id, { schedule: { ...menu.schedule, windows: menu.schedule.windows.filter((_, j) => j !== i) } })} className="px-3 py-2 border hairline font-mono2 text-[13px] font-bold uppercase">Remove</button>
+                            )}
+                          </div>
+                        ))}
+                        <button type="button" onClick={() => patchMenu(menu.id, { schedule: { ...menu.schedule, windows: [...menu.schedule.windows, { start: "12:00", end: "14:00" }] } })} className="justify-self-start px-3 py-2 border hairline font-mono2 text-[13px] font-bold uppercase tracking-wider">
+                          Add hours
+                        </button>
+                      </div>
+                      <p className="text-[13px] opacity-60 mt-2">A close time earlier than the open time runs past midnight.</p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="mt-5">
@@ -125,8 +182,18 @@ export default function MenusSection({ doc, onChange, onCommit }: {
                       </button>
                     );
                   })}
-                  {doc.sections.length === 0 && <span className="text-[13px] opacity-60">No sections yet. Sections are created from the Items page when you add food.</span>}
+                  {doc.sections.length === 0 && <span className="text-[13px] opacity-60">No sections yet. Sections are created from the Dishes page when you add food.</span>}
                 </div>
+                {(() => {
+                  const hidden = doc.sections.filter(sec => !menu.sectionIds.includes(sec.id) && sec.itemIds.length > 0);
+                  if (!hidden.length) return null;
+                  return (
+                    <p className="text-[13px] mt-2.5 leading-relaxed" style={{ color: "var(--color-accent2)" }} role="note">
+                      Not on this menu: {hidden.map(sec => `${sec.name} (${sec.itemIds.length} ${sec.itemIds.length === 1 ? "dish" : "dishes"})`).join(", ")}.
+                      Guests cannot see them on this menu. The dishes themselves are safe on the Dishes page.
+                    </p>
+                  );
+                })()}
               </div>
 
               <div className="grid sm:grid-cols-[1fr_auto] gap-4 mt-5 items-end">
@@ -145,7 +212,7 @@ export default function MenusSection({ doc, onChange, onCommit }: {
 
       <div className="mt-8 border-t hairline pt-6">
         <h3 className="font-display uppercase text-2xl">Add a menu</h3>
-        <p className="text-[15px] opacity-75 mt-2 max-w-lg leading-relaxed">A brunch menu, a Ramadan menu, a late night menu. It starts empty: give it hours above, then tick its sections.</p>
+        <p className="text-[15px] opacity-75 mt-2 max-w-lg leading-relaxed">Only if you need one: a brunch menu, a Ramadan menu, a late night menu. It starts empty. Give it a name here, then set its days and hours on its card and tick the sections it should carry.</p>
         <div className="flex gap-2.5 mt-4 flex-wrap">
           <input value={newName} onChange={e => { setNewName(e.target.value); if (addError) setAddError(""); }} placeholder="Menu name, e.g. Brunch" className={inputCls} style={{ maxWidth: 320 }} aria-label="New menu name" />
           <PrimaryButton onClick={addMenu}>Add menu</PrimaryButton>
