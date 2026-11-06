@@ -98,12 +98,13 @@ const STEPS = [
 // upload-first with progress, an in-place retry and a receipt; a photo
 // link is the secondary route. Deleting asks in the design (never the
 // browser's confirm box) and the Dishes list offers Undo afterwards.
-export default function ItemForm({ doc, item, onClose, onCommit, onDeleted }: {
+export default function ItemForm({ doc, item, onClose, onCommit, onDeleted, onCreateMenuFirst }: {
   doc: MenuDocument;
   item: Item | null; // null = adding new food
   onClose: () => void;
   onCommit: (next: MenuDocument) => void;
   onDeleted?: (name: string) => void;
+  onCreateMenuFirst?: () => void;
 }) {
   const draftKey = `claro-menu-draft-v1:${item?.id ?? "new"}`;
   const [draft, setDraft] = useState<ItemDraft>(() => (item ? draftFromItem(doc, item) : blankDraft(doc)));
@@ -332,6 +333,35 @@ export default function ItemForm({ doc, item, onClose, onCommit, onDeleted }: {
     onCommit(next);
     onDeleted?.(item.name);
     onClose();
+  }
+
+  // Menu before food, the hard backstop (Nov 6, 2026): a NEW dish in
+  // a document with no menus could only ever land in a section
+  // attached to nothing, invisible to guests. Refuse the form and
+  // route the owner to Menus instead. Editing an existing dish stays
+  // open: fixing a name or a price must never be blocked.
+  if (!item && doc.menus.length === 0) {
+    return (
+      <div className="fixed inset-0 z-50 overflow-y-auto" style={{ background: "var(--color-bg)" }} role="dialog" aria-modal="true" aria-label="Add food">
+        <div className="max-w-3xl mx-auto px-5 py-6 pb-16">
+          <div className="flex items-start justify-between gap-4 pb-5 border-b hairline">
+            <div>
+              <p className="font-mono2 text-[13px] uppercase tracking-[0.22em]" style={{ color: "var(--color-accent)" }}>Add food</p>
+              <h2 className="font-display uppercase text-4xl leading-none mt-2">A menu comes first</h2>
+            </div>
+            <button type="button" onClick={onClose} className="px-4 py-2.5 min-h-11 border hairline font-mono2 text-[13px] font-bold uppercase tracking-wider shrink-0">Close</button>
+          </div>
+          <p className="text-[15px] opacity-80 leading-relaxed mt-6 max-w-xl">
+            Food sits on a menu, and there is no menu yet. A dish added now would have nowhere to appear, and guests would never see it.
+            Create your first menu, then come back and add the dish to it.
+          </p>
+          <div className="mt-6 flex gap-2.5 flex-wrap">
+            <PrimaryButton onClick={() => { onClose(); onCreateMenuFirst?.(); }}>Create a menu</PrimaryButton>
+            <GhostButton onClick={onClose}>Not now</GhostButton>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

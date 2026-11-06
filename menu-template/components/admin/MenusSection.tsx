@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MenuDocument, MenuEntity } from "../../lib/types";
 import { activeMenu } from "../../lib/specials";
-import { DayChips, EmptyState, Field, PrimaryButton, SectionTitle, UndoToast, inputCls, scheduleSummary, uid } from "./shared";
+import { DayChips, Field, PrimaryButton, SectionTitle, UndoToast, inputCls, scheduleSummary, uid } from "./shared";
 
 // Menus, simplified (Nov 3, 2026, Evans's verdict after using the old
 // page himself: it confused him, and he builds this thing, so it would
@@ -93,8 +93,12 @@ export default function MenusSection({ doc, onChange, onCommit }: {
     <div>
       <SectionTitle eyebrow="Your menus" title="Menus" />
       <p className="mt-3 text-[15px] opacity-80 leading-relaxed max-w-xl">
-        Most places run one menu all day. Add another only when the food or the prices change by time of day, like a brunch
-        or a late night menu. Every change here saves itself as you make it.
+        {doc.menus.length === 0 ? (
+          <>Your first menu is the page your guests open, and your food sits on it. Create it below, keep it running all day for now if that fits, then add your dishes from the Dishes page.</>
+        ) : (
+          <>Most places run one menu all day. Add another only when the food or the prices change by time of day, like a brunch
+          or a late night menu. Every change here saves itself as you make it.</>
+        )}
       </p>
       {liveMenu && (
         <p className="mt-4 inline-block px-3.5 py-2.5 border hairline text-[14px]" style={{ background: "var(--color-surface)" }} role="status">
@@ -211,18 +215,20 @@ export default function MenusSection({ doc, onChange, onCommit }: {
       </div>
 
       <div className="mt-8 border-t hairline pt-6">
-        <h3 className="font-display uppercase text-2xl">Add a menu</h3>
-        <p className="text-[15px] opacity-75 mt-2 max-w-lg leading-relaxed">Only if you need one: a brunch menu, a Ramadan menu, a late night menu. It starts empty. Give it a name here, then set its days and hours on its card and tick the sections it should carry.</p>
+        <h3 className="font-display uppercase text-2xl">{doc.menus.length === 0 ? "Create your first menu" : "Add a menu"}</h3>
+        <p className="text-[15px] opacity-75 mt-2 max-w-lg leading-relaxed">
+          {doc.menus.length === 0
+            ? "Start with one menu for everything you serve. Name it, and it begins running every day, 9 in the morning to 10 at night. You can change its days and hours on its card, and add brunch or late night menus later, only if you need them."
+            : "Only if you need one: a brunch menu, a Ramadan menu, a late night menu. It starts empty. Give it a name here, then set its days and hours on its card and tick the sections it should carry."}
+        </p>
         <div className="flex gap-2.5 mt-4 flex-wrap">
           <input value={newName} onChange={e => { setNewName(e.target.value); if (addError) setAddError(""); }} placeholder="Menu name, e.g. Brunch" className={inputCls} style={{ maxWidth: 320 }} aria-label="New menu name" />
-          <PrimaryButton onClick={addMenu}>Add menu</PrimaryButton>
+          <PrimaryButton onClick={addMenu}>{doc.menus.length === 0 ? "Create menu" : "Add menu"}</PrimaryButton>
         </div>
         {addError && <p className="text-[13px] mt-2.5" style={{ color: "var(--color-accent)" }} role="alert">{addError}</p>}
       </div>
 
       {undo && <UndoToast message={undo.label} onUndo={doUndo} />}
-
-      {doc.menus.length === 0 && <div className="mt-6"><EmptyState title="No menus yet" body="Add your first menu above. Guests cannot see anything until a menu carries at least one section." /></div>}
     </div>
   );
 }

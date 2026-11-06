@@ -12,12 +12,17 @@ import { EmptyState, PrimaryButton, SectionTitle, UndoToast, inputCls, parsePric
 // price change used to mean opening the full dish form). Enter saves,
 // Escape cancels. Deleting a dish offers Undo for 10 seconds instead
 // of a browser confirm box.
-export default function ItemsSection({ doc, onCommit, startNewItem, onConsumeStartNew }: {
+export default function ItemsSection({ doc, onCommit, startNewItem, onConsumeStartNew, onCreateMenuFirst }: {
   doc: MenuDocument;
   onCommit: (next: MenuDocument) => void;
   startNewItem: boolean;
   onConsumeStartNew: () => void;
+  onCreateMenuFirst: () => void;
 }) {
+  // Menu before food (Nov 6, 2026): with no menu, a new dish would
+  // land in a section attached to nothing and guests would never see
+  // it, so every new-dish route detours to Menus first.
+  const hasMenu = doc.menus.length > 0;
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<Item | null>(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -28,11 +33,12 @@ export default function ItemsSection({ doc, onCommit, startNewItem, onConsumeSta
 
   useEffect(() => {
     if (startNewItem) {
+      onConsumeStartNew();
+      if (!hasMenu) { onCreateMenuFirst(); return; }
       setEditing(null);
       setFormOpen(true);
-      onConsumeStartNew();
     }
-  }, [startNewItem, onConsumeStartNew]);
+  }, [startNewItem, onConsumeStartNew, hasMenu, onCreateMenuFirst]);
 
   useEffect(() => () => { if (undoTimer.current) clearTimeout(undoTimer.current); }, []);
 
@@ -50,7 +56,11 @@ export default function ItemsSection({ doc, onCommit, startNewItem, onConsumeSta
     return bySection;
   }, [doc, query]);
 
-  const openNew = () => { setEditing(null); setFormOpen(true); };
+  const openNew = () => {
+    if (!hasMenu) { onCreateMenuFirst(); return; }
+    setEditing(null);
+    setFormOpen(true);
+  };
   const openEdit = (item: Item) => { setEditing(item); setFormOpen(true); };
 
   // Quick price edit only where one number tells the story. Dishes
@@ -103,18 +113,31 @@ export default function ItemsSection({ doc, onCommit, startNewItem, onConsumeSta
   return (
     <div>
       <SectionTitle eyebrow="Everything you serve" title="Dishes">
-        <PrimaryButton onClick={openNew}>Add food</PrimaryButton>
+        <PrimaryButton onClick={openNew}>{hasMenu ? "Add food" : "Create a menu first"}</PrimaryButton>
       </SectionTitle>
 
       <div className="mt-5">
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search dishes..." className={inputCls} aria-label="Search dishes" />
       </div>
 
+      {!hasMenu && doc.items.length > 0 && (
+        <div className="mt-6 border p-4 flex items-center gap-3 flex-wrap" style={{ borderColor: "var(--color-accent)", background: "var(--color-surface)" }} role="note">
+          <p className="text-[15px] leading-relaxed flex-1 min-w-52">These dishes are not on a menu, so guests cannot see them yet. Create a menu, then tick the sections it should carry.</p>
+          <PrimaryButton onClick={onCreateMenuFirst}>Create a menu</PrimaryButton>
+        </div>
+      )}
+
       {doc.items.length === 0 ? (
         <div className="mt-7">
-          <EmptyState title="No food yet" body="Your menu starts with the first dish. Add it with its photo, price and section, and guests will see it the moment you save.">
-            <PrimaryButton onClick={openNew}>Add your first dish</PrimaryButton>
-          </EmptyState>
+          {hasMenu ? (
+            <EmptyState title="No food yet" body="Your menu starts with the first dish. Add it with its photo, price and section, and guests will see it the moment you save.">
+              <PrimaryButton onClick={openNew}>Add your first dish</PrimaryButton>
+            </EmptyState>
+          ) : (
+            <EmptyState title="Create a menu first" body="Food needs a menu to sit on. Create your first menu, then come back here and add dishes to it.">
+              <PrimaryButton onClick={onCreateMenuFirst}>Create your first menu</PrimaryButton>
+            </EmptyState>
+          )}
         </div>
       ) : groups.length === 0 ? (
         <p className="mt-7 text-[15px] opacity-70">Nothing matches "{query}". Try another name.</p>
@@ -205,6 +228,7 @@ export default function ItemsSection({ doc, onCommit, startNewItem, onConsumeSta
           onClose={() => setFormOpen(false)}
           onCommit={onCommit}
           onDeleted={handleDeleted}
+          onCreateMenuFirst={onCreateMenuFirst}
         />
       )}
 

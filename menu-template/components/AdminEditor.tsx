@@ -39,8 +39,9 @@ const TOUR_KEY = `claro-menu-tour-v1:${restaurantConfig.domain.primary}`;
 const FIRSTRUN_KEY = `claro-menu-firstrun-v1:${restaurantConfig.domain.primary}`;
 
 const TOUR_STEPS: { section: EditorSectionId; title: string; body: string }[] = [
-  { section: "overview", title: "Welcome to your menu editor", body: "Everything your guests see on your menu page is controlled from here, on your phone. This short walk shows you the four jobs that matter. Skip it any time." },
-  { section: "items", title: "Your dishes live here", body: "Tap Add food to put a new dish on the menu with its photo and price. To change just a price later, tap the price itself, type the new one, and you are done." },
+  { section: "overview", title: "Welcome to your menu editor", body: "Everything your guests see on your menu page is controlled from here, on your phone. This short walk shows you the jobs that matter, in the order to do them. Skip it any time." },
+  { section: "menus", title: "Start with a menu", body: "A menu is the page your guests open, and your food sits on it. Create your first menu here before adding any dishes: without a menu, a dish has nowhere to appear and guests cannot see it. Most places need just one menu, running all day." },
+  { section: "items", title: "Your dishes live here", body: "Once your menu exists, tap Add food to put a dish on it with its photo and price. To change just a price later, tap the price itself, type the new one, and you are done." },
   { section: "availability", title: "When the kitchen runs out", body: "Open Sold out and tap the dish. Guests see it marked sold out at once, and it comes back when you say: end of service, tomorrow, or when you switch it back." },
   { section: "specials", title: "Offers run themselves", body: "A special is a timed offer, like happy hour. Set it once with its days and hours, and it switches itself on and off. Your normal prices are never touched." },
   { section: "qr", title: "Put your link everywhere", body: "Download the QR code for your tables, and paste your menu link into your Instagram bio and Google profile. That is how guests find the menu." },
@@ -378,7 +379,7 @@ export default function AdminEditor({ initialDoc, billingState }: { initialDoc: 
         <main className="px-5 py-7 md:px-10 md:py-9 max-w-3xl">
           {section === "overview" && <OverviewSection doc={doc} go={go} flags={flags} onViewLive={() => setFlag({ viewedLive: true })} onReplayTour={replayTour} />}
           {section === "menus" && <MenusSection doc={doc} onChange={update} onCommit={commit} />}
-          {section === "items" && <ItemsSection doc={doc} onCommit={commit} startNewItem={pendingNewItem} onConsumeStartNew={() => setPendingNewItem(false)} />}
+          {section === "items" && <ItemsSection doc={doc} onCommit={commit} startNewItem={pendingNewItem} onConsumeStartNew={() => setPendingNewItem(false)} onCreateMenuFirst={() => go("menus")} />}
           {section === "specials" && <SpecialsSection doc={doc} onCommit={commit} />}
           {section === "availability" && <AvailabilitySection doc={doc} onCommit={commit} />}
           {section === "qr" && <QrSection />}

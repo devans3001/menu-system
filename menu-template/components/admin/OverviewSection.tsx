@@ -30,13 +30,24 @@ export default function OverviewSection({ doc, go, flags, onViewLive, onReplayTo
     { value: String(liveSpecials.length), label: "Specials running now", flame: liveSpecials.length > 0 },
   ];
 
+  // Menu before food (Evans's empty-build finding, Nov 6, 2026): a
+  // dish sits on a menu, so creating the first menu is job one, and
+  // every Add food route detours to Menus while no menu exists.
+  const hasMenu = doc.menus.length > 0;
   const checklist: { label: string; hint: string; done: boolean; action: () => void; cta: string }[] = [
     {
+      label: "Create your first menu",
+      hint: "A menu is the page guests open. Your sections and dishes sit on it, so it comes before the food.",
+      done: hasMenu,
+      action: () => go("menus"),
+      cta: "Create menu",
+    },
+    {
       label: "Add a dish with a photo and a price",
-      hint: "Your menu starts here. One dish, done well, is enough to begin.",
+      hint: hasMenu ? "One dish, done well, is enough to begin." : "This step opens once your first menu exists.",
       done: doc.items.some(i => i.active && i.photoUrl && (i.basePrice !== null || i.variantIds.length > 0)),
-      action: () => go("items", "new-item"),
-      cta: "Add food",
+      action: hasMenu ? () => go("items", "new-item") : () => go("menus"),
+      cta: hasMenu ? "Add food" : "Create menu first",
     },
     {
       label: "See your menu the way guests see it",
@@ -55,7 +66,11 @@ export default function OverviewSection({ doc, go, flags, onViewLive, onReplayTo
     {
       label: "Try marking a dish sold out",
       hint: "So the first real sold out moment is not your first practice.",
-      done: doc.availability.length > 0,
+      // Only a record that actually marks something sold out counts:
+      // the dish form writes an availability record on every save,
+      // sold out or not, so counting records alone ticked this job
+      // for owners who never marked anything (found Nov 6, 2026).
+      done: doc.availability.some(a => a.soldOut),
       action: () => go("availability"),
       cta: "Open Sold out",
     },
@@ -127,8 +142,8 @@ export default function OverviewSection({ doc, go, flags, onViewLive, onReplayTo
 
       <h3 className="font-display uppercase text-2xl mt-9">Quick actions</h3>
       <div className="mt-4 grid gap-2.5">
-        <button type="button" onClick={() => go("items", "new-item")} className="text-left px-5 py-4 min-h-11 font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>
-          Add food
+        <button type="button" onClick={hasMenu ? () => go("items", "new-item") : () => go("menus")} className="text-left px-5 py-4 min-h-11 font-mono2 text-[13px] font-bold uppercase tracking-wider" style={{ background: "var(--color-accent)", color: "#0D0A07" }}>
+          {hasMenu ? "Add food" : "Create a menu first"}
         </button>
         <button type="button" onClick={() => go("availability")} className="text-left px-5 py-4 min-h-11 border hairline font-mono2 text-[13px] font-bold uppercase tracking-wider">
           Mark a dish sold out
