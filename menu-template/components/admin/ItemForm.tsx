@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Allergen, DietaryTag, Item, MenuDocument, PriceType } from "../../lib/types";
+import type { Allergen, DietaryTag, Item, MenuDocument, PriceType, Section } from "../../lib/types";
 import { ALLERGENS, DIETARY_TAGS } from "../../lib/vocab";
+import { activeMenu } from "../../lib/specials";
 import { cloudinaryUploadConfigured, uploadPhotoToCloudinary } from "../../lib/upload/cloudinary";
 import { restaurantConfig } from "../../restaurant.config";
 import { BigToggle, ChipMultiSelect, Field, GhostButton, PrimaryButton, inputCls, parsePrice, uid } from "./shared";
@@ -19,7 +20,7 @@ interface ItemDraft {
   description: string;
   sectionId: string;
   newSectionName: string;
-  newSectionMenuIds: string[];
+  menuId: string;
   priceType: PriceType;
   basePrice: string;
   todaysMarketPrice: string;
@@ -35,15 +36,59 @@ interface ItemDraft {
   groups: GroupDraft[];
 }
 
+// Placement helpers (menu-first rework, Nov 6, 2026): the form asks
+// "which menu, then which section on it", in the order owners think.
+// The default menu is the one guests are seeing now; a dish being
+// edited starts from a menu that already carries its section, so a
+// price-only edit can never silently move or duplicate anything.
+function defaultMenuId(doc: MenuDocument): string {
+  return activeMenu(doc)?.id ?? doc.menus[0]?.id ?? "";
+}
+
+function sectionsOnMenu(doc: MenuDocument, menuId: string): Section[] {
+  const menu = doc.menus.find(m => m.id === menuId);
+  if (!menu) return [];
+  return menu.sectionIds
+    .map(id => doc.sections.find(s => s.id === id))
+    .filter((s): s is Section => !!s)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+// A restored draft was written against an older document, possibly
+// an older shape of this form. Re-sync its placement against today's
+// document instead of resurrecting a dead end: a menu that did not
+// exist when the draft was left, a section that has since moved, or
+// "no section yet" on a new dish (which now must land somewhere).
+function resyncPlacement(draft: ItemDraft, doc: MenuDocument, item: Item | null): ItemDraft {
+  const next = { ...draft };
+  if (!doc.menus.some(m => m.id === next.menuId)) next.menuId = defaultMenuId(doc);
+  const isPick = next.sectionId !== NEW_SECTION && next.sectionId !== NO_SECTION;
+  const sectionExists = isPick && doc.sections.some(s => s.id === next.sectionId);
+  if (isPick && !sectionExists) {
+    next.sectionId = sectionsOnMenu(doc, next.menuId)[0]?.id ?? NEW_SECTION;
+  } else if (sectionExists) {
+    const carriers = doc.menus.filter(m => m.sectionIds.includes(next.sectionId));
+    if (carriers.length && !carriers.some(m => m.id === next.menuId)) {
+      next.menuId = carriers.find(m => m.id === activeMenu(doc)?.id)?.id ?? carriers[0].id;
+    }
+  }
+  if (!item && next.sectionId === NO_SECTION && doc.menus.length > 0) {
+    next.sectionId = sectionsOnMenu(doc, next.menuId)[0]?.id ?? NEW_SECTION;
+  }
+  return next;
+}
+
 function draftFromItem(doc: MenuDocument, item: Item): ItemDraft {
   const home = doc.sections.find(s => s.itemIds.includes(item.id));
+  const carriers = home ? doc.menus.filter(m => m.sectionIds.includes(home.id)) : [];
+  const menuId = carriers.find(m => m.id === activeMenu(doc)?.id)?.id ?? carriers[0]?.id ?? defaultMenuId(doc);
   return {
     name: item.name,
     subtitle: item.subtitle ?? "",
     description: item.description,
     sectionId: home?.id ?? NO_SECTION,
     newSectionName: "",
-    newSectionMenuIds: doc.menus.map(m => m.id),
+    menuId,
     priceType: item.priceType,
     basePrice: item.basePrice === null || item.basePrice === undefined ? "" : String(item.basePrice),
     todaysMarketPrice: item.todaysMarketPrice === null || item.todaysMarketPrice === undefined ? "" : String(item.todaysMarketPrice),
@@ -67,11 +112,11 @@ function draftFromItem(doc: MenuDocument, item: Item): ItemDraft {
 }
 
 function blankDraft(doc: MenuDocument): ItemDraft {
-  const firstSection = doc.sections.slice().sort((a, b) => a.sortOrder - b.sortOrder)[0];
+  const menuId = defaultMenuId(doc);
   return {
     name: "", subtitle: "", description: "",
-    sectionId: firstSection?.id ?? NEW_SECTION,
-    newSectionName: "", newSectionMenuIds: doc.menus.map(m => m.id),
+    sectionId: sectionsOnMenu(doc, menuId)[0]?.id ?? NEW_SECTION,
+    newSectionName: "", menuId,
     priceType: "fixed", basePrice: "", todaysMarketPrice: "", photoUrl: "",
     dietaryTags: [], allergenContains: [], badgeLabel: "", serves: "",
     isHot: false, active: true, soldOut: false, variants: [], groups: [],
@@ -130,7 +175,7 @@ export default function ItemForm({ doc, item, onClose, onCommit, onDeleted, onCr
       const raw = window.localStorage.getItem(draftKey);
       if (raw) {
         const parsed = JSON.parse(raw) as ItemDraft;
-        if (parsed && typeof parsed.name === "string") { setDraft(parsed); setDraftRestored(true); }
+        if (parsed && typeof parsed.name === "string") { setDraft(resyncPlacement(parsed, doc, item)); setDraftRestored(true); }
       }
     } catch { /* a broken draft never blocks the form */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,6 +198,9 @@ export default function ItemForm({ doc, item, onClose, onCommit, onDeleted, onCr
 
   const set = (patch: Partial<ItemDraft>) => setDraft(d => ({ ...d, ...patch }));
   const sortedSections = useMemo(() => doc.sections.slice().sort((a, b) => a.sortOrder - b.sortOrder), [doc.sections]);
+  const chosenMenu = doc.menus.find(m => m.id === draft.menuId);
+  const menuSections = useMemo(() => sectionsOnMenu(doc, draft.menuId), [doc, draft.menuId]);
+  const chooseMenu = (menuId: string) => set({ menuId, sectionId: sectionsOnMenu(doc, menuId)[0]?.id ?? NEW_SECTION });
 
   async function doUpload(file: File | undefined) {
     if (!file) return;
@@ -176,6 +224,8 @@ export default function ItemForm({ doc, item, onClose, onCommit, onDeleted, onCr
     const errs: string[] = [];
     if (which === 1) {
       if (!draft.name.trim()) errs.push("Give the dish a name.");
+      if (doc.menus.length > 0 && !doc.menus.some(m => m.id === draft.menuId)) errs.push("Pick the menu this dish goes on.");
+      if (!item && draft.sectionId === NO_SECTION) errs.push("Pick a section on the menu, or create a new one. A dish with no section is invisible to guests.");
       if (draft.sectionId === NEW_SECTION && !draft.newSectionName.trim()) errs.push("Name the new section, or pick an existing one.");
       if (draft.sectionId !== NEW_SECTION && draft.sectionId !== NO_SECTION && !doc.sections.some(s => s.id === draft.sectionId)) errs.push("That section no longer exists. Pick another.");
     }
@@ -237,8 +287,15 @@ export default function ItemForm({ doc, item, onClose, onCommit, onDeleted, onCr
         sortOrder: Math.max(0, ...next.sections.map(s => s.sortOrder)) + 1,
         itemIds: [], childSectionIds: [],
       });
-      for (const m of next.menus) if (draft.newSectionMenuIds.includes(m.id) && !m.sectionIds.includes(secId)) m.sectionIds.push(secId);
+      const homeMenu = next.menus.find(m => m.id === draft.menuId);
+      if (homeMenu && !homeMenu.sectionIds.includes(secId)) homeMenu.sectionIds.push(secId);
       targetSectionId = secId;
+    } else if (targetSectionId) {
+      // The picker promises the dish's section sits on the chosen
+      // menu: attach it if it was not there. This also repairs a
+      // section left on no menu at all.
+      const homeMenu = next.menus.find(m => m.id === draft.menuId);
+      if (homeMenu && !homeMenu.sectionIds.includes(targetSectionId)) homeMenu.sectionIds.push(targetSectionId);
     }
 
     const oldGroupIds = item?.modifierGroupIds ?? [];
@@ -395,7 +452,22 @@ export default function ItemForm({ doc, item, onClose, onCommit, onDeleted, onCr
             <Field label="Dish name">
               <input value={draft.name} onChange={e => set({ name: e.target.value })} className={inputCls} placeholder="e.g. Smoky Jollof Rice" data-testid="item-name" />
             </Field>
-            <div className="grid sm:grid-cols-2 gap-5">
+            {doc.menus.length > 0 ? (
+              <div className="grid sm:grid-cols-2 gap-5">
+                <Field label="Menu (where guests find this dish)">
+                  <select value={draft.menuId} onChange={e => chooseMenu(e.target.value)} className={inputCls} style={{ background: "var(--color-surface)" }} data-testid="item-menu">
+                    {doc.menus.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </Field>
+                <Field label="Section on this menu">
+                  <select value={draft.sectionId} onChange={e => set({ sectionId: e.target.value })} className={inputCls} style={{ background: "var(--color-surface)" }} data-testid="item-section">
+                    {menuSections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    <option value={NEW_SECTION}>Create a new section...</option>
+                    {item && <option value={NO_SECTION}>No section yet</option>}
+                  </select>
+                </Field>
+              </div>
+            ) : (
               <Field label="Section (where it sits on the menu)">
                 <select value={draft.sectionId} onChange={e => set({ sectionId: e.target.value })} className={inputCls} style={{ background: "var(--color-surface)" }} data-testid="item-section">
                   {sortedSections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -403,31 +475,16 @@ export default function ItemForm({ doc, item, onClose, onCommit, onDeleted, onCr
                   <option value={NO_SECTION}>No section yet</option>
                 </select>
               </Field>
-              <Field label="Short line (optional)">
-                <input value={draft.subtitle} onChange={e => set({ subtitle: e.target.value })} className={inputCls} placeholder="e.g. Signature dish" />
-              </Field>
-            </div>
+            )}
+            <Field label="Short line (optional)">
+              <input value={draft.subtitle} onChange={e => set({ subtitle: e.target.value })} className={inputCls} placeholder="e.g. Signature dish" />
+            </Field>
             {draft.sectionId === NEW_SECTION && (
               <div className="border hairline p-4 grid gap-4" style={{ background: "var(--color-surface)" }}>
                 <Field label="New section name">
                   <input value={draft.newSectionName} onChange={e => set({ newSectionName: e.target.value })} className={inputCls} placeholder="e.g. Small Chops" data-testid="new-section-name" />
                 </Field>
-                <div>
-                  <span className="text-[13px] font-semibold uppercase tracking-wide opacity-90">Show this section on</span>
-                  <div className="flex gap-1.5 flex-wrap mt-2">
-                    {doc.menus.map(m => {
-                      const on = draft.newSectionMenuIds.includes(m.id);
-                      return (
-                        <button key={m.id} type="button" aria-pressed={on}
-                          onClick={() => set({ newSectionMenuIds: on ? draft.newSectionMenuIds.filter(id => id !== m.id) : [...draft.newSectionMenuIds, m.id] })}
-                          className="px-3 py-2.5 min-h-11 text-[13px] font-semibold border"
-                          style={on ? { background: "var(--color-ink)", color: "var(--color-bg)", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--color-ink) 20%, transparent)" }}>
-                          {m.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                {chosenMenu && <p className="text-[13px] opacity-60 leading-relaxed">It will be added to the {chosenMenu.name} menu, with this dish in it.</p>}
               </div>
             )}
             <Field label="Description" hint="Written like food writing, not a spec sheet. Guests read this before they order.">
